@@ -85,6 +85,18 @@
     </div>
     <div id="pttState">اضغط مطولًا للتحدث</div>
 
+    <div class="card" id="offerCard" style="display:none; border-color:var(--accent); margin-top:6px">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <b>🧕 تاليا: طلب جديد</b><span class="pill num" id="offCount" style="background:#3a2320;color:var(--accent)">25</span>
+      </div>
+      <div id="offTitle" style="margin:6px 0"></div>
+      <div class="hint num" id="offKm"></div>
+      <div style="display:flex; gap:8px; margin-top:9px">
+        <button class="big" id="offAccept" style="margin-top:0; flex:1; background:var(--online)">✅ قبول</button>
+        <button class="big" id="offReject" style="margin-top:0; flex:1; background:#5b6375">رفض</button>
+      </div>
+    </div>
+
     <div class="card" id="orderCard" style="display:none; border-color:var(--busy); margin-top:6px">
       <div style="display:flex; justify-content:space-between; align-items:center">
         <b class="num" id="ordId"></b><span class="pill" id="ordSt" style="background:#332a12;color:var(--busy)">مُسنَد</span>
@@ -136,13 +148,39 @@
     o.start(); o.stop(ctx.currentTime + ms / 1000);
   } catch {} };
 
-  function logEv(cls, who, html) {
+  // 🛡️ تهريب النصوص الواردة قبل عرضها — يسد ثغرة الحقن على الجهاز
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+  function logEv(cls, who, text) {
     const d = document.createElement('div');
     d.className = 'ev ' + cls;
-    d.innerHTML = `<div class="who">${who} · ${new Date().toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</div>${html}`;
+    d.innerHTML = `<div class="who">${esc(who)} · ${new Date().toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</div>${esc(text)}`;
     $('log').prepend(d);
     while ($('log').children.length > 30) $('log').lastChild.remove();
   }
+
+  // ---------- عرض تاليا (قبول/رفض بمهلة) ----------
+  let offer = null, offTimer = null;
+  function showOffer(m) {
+    offer = m;
+    $('offTitle').textContent = m.order.title;
+    $('offKm').textContent = m.km != null ? 'يبعد عنك ' + m.km + ' كم' : '';
+    $('offerCard').style.display = 'block';
+    let left = m.expiresInS || 25;
+    $('offCount').textContent = left;
+    clearInterval(offTimer);
+    offTimer = setInterval(() => {
+      $('offCount').textContent = --left;
+      if (left <= 3 && left > 0) beep(700, 80);
+      if (left <= 0) hideOffer();
+    }, 1000);
+    beep(520, 300);
+  }
+  function hideOffer() { clearInterval(offTimer); offTimer = null; offer = null; $('offerCard').style.display = 'none'; }
+  $('offAccept').onclick = () => { if (!offer) return;
+    ws.send(JSON.stringify({ t: 'offer_answer', orderId: offer.order.id, accept: true })); hideOffer(); };
+  $('offReject').onclick = () => { if (!offer) return;
+    ws.send(JSON.stringify({ t: 'offer_answer', orderId: offer.order.id, accept: false })); hideOffer();
+    logEv('', '⚪ أنت', 'رفضت العرض'); };
 
   // ---------- اتصال ----------
   function start() {
@@ -208,7 +246,13 @@
       setOrderMsg(m.order || null, false);
       startGps(); keepAwake(); watchBattery(); initMic();
     }
-    else if (m.t === 'order') setOrderMsg(m.order || null, true);
+    else if (m.t === 'order') { hideOffer(); setOrderMsg(m.order || null, true); }
+    else if (m.t === 'offer') showOffer(m);
+    else if (m.t === 'offer_cancel') { if (offer?.order.id === m.orderId) hideOffer(); }
+    else if (m.t === 'renamed') { localStorage.driverName = m.name; $('name').value = m.name;
+      logEv('ann', 'ℹ النظام', 'غُيّر اسمك إلى: ' + m.name); }
+    else if (m.t === 'kicked') { closing = true;
+      logEv('ann', '⛔ النظام', 'فُصل هذا الجهاز من غرفة العمليات'); }
     else if (m.t === 'stats') $('chCnt').textContent = m.online + ' متصل';
     else if (m.t === 'voice') {                       // بث وارد — تشغيل فوري
       beep(660, 90);

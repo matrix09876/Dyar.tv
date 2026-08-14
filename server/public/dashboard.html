@@ -145,7 +145,7 @@
 
     <div class="pane" id="p-feed">
       <div class="announce-row">
-        <input id="annText" placeholder="إعلان لكل الأجهزة (يُنطق صوتيًا)…">
+        <input id="annText" placeholder="إعلان لكل الأجهزة — تبلغه تاليا صوتيًا…">
         <button id="annSend">📢</button>
       </div>
       <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="autoPlay" checked> تشغيل البثوث الواردة تلقائيًا</label>
@@ -190,6 +190,8 @@
 
 <script>
   const $ = id => document.getElementById(id);
+  // 🛡️ تهريب كل نص وارد من الأجهزة قبل حقنه في الواجهة — يسد ثغرة XSS عبر اسم/رسالة خبيثة
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
   const drivers = new Map(), ordersM = new Map();
   const routeCache = new Map();            // orderId -> {geometry, km, min, from:[lng,lat], at}
   let selected = null, selectedOrder = null, map, ws, pin = sessionStorage.pin || '';
@@ -301,6 +303,7 @@
     const busy = activeOrderOf(d.id);
     d.el.querySelector('.marker').style.background =
       d.sos ? 'var(--alert)' : !d.online ? 'var(--offline)' : busy ? 'var(--busy)' : 'var(--online)';
+    // textContent آمن ضد الحقن — لا innerHTML هنا
     d.el.querySelector('.mlabel').textContent = d.name + (busy ? ' · ' + busy.id : '') + (d.last.acc ? ' ±' + d.last.acc + 'م' : '');
     if ($('tFollow').checked && selected === d.id) map.easeTo({ center: [d.last.lng, d.last.lat], duration: 800 });
   }
@@ -333,18 +336,41 @@
       const o = activeOrderOf(d.id);
       return `<button class="drv ${selected===d.id?'sel':''}" data-id="${d.id}">
         <span class="row1"><span class="dot" style="background:var(--${d.sos?'alert':!d.online?'offline':o?'busy':'online'})"></span>
-          ${d.name}${d.sos ? ' 🚨' : ''}
-          ${o ? `<span class="badge num">${o.id}</span>` : ''}</span>
+          ${esc(d.name)}${d.sos ? ' 🚨' : ''}
+          ${o ? `<span class="badge num">${esc(o.id)}</span>` : ''}</span>
         <span class="meta">
-          <span>${d.device || ''}</span>
+          <span>${esc(d.device || '')}</span>
           ${acc != null ? `<span class="num ${accCls}">± ${acc} م</span>` : ''}
           ${d.last?.spd != null ? `<span class="num">${d.last.spd} كم/س</span>` : ''}
           ${d.last?.bat != null ? `<span class="num">🔋${d.last.bat}٪</span>` : ''}
           ${d.last ? `<span>${age(d.last.ts)}</span>` : '<span>لا إحداثيات</span>'}
-        </span></button>`;
+        </span>
+        ${selected===d.id ? `<span class="meta" style="gap:6px; margin-top:4px">
+          <button class="badge" data-act="rename" data-id="${d.id}">✏️ تسمية</button>
+          ${d.online ? `<button class="badge" data-act="kick" data-id="${d.id}">⛔ فصل</button>` : `<button class="badge" data-act="remove" data-id="${d.id}">🗑 حذف</button>`}
+        </span>` : ''}
+      </button>`;
     }).join('');
   }
-  $('dlist').addEventListener('click', e => { const b = e.target.closest('.drv'); if (b) selectDriver(b.dataset.id, true); });
+  $('dlist').addEventListener('click', e => {
+    const act = e.target.closest('[data-act]');
+    if (act) {
+      e.stopPropagation();
+      const id = act.dataset.id, d = drivers.get(id);
+      if (act.dataset.act === 'rename') {
+        const name = prompt('الاسم الجديد للموصل:', d?.name || '');
+        if (name?.trim()) ws.send(JSON.stringify({ t: 'device_rename', id, name: name.trim() }));
+      } else if (act.dataset.act === 'kick') {
+        if (confirm('فصل جهاز «' + (d?.name || id) + '» فورًا؟ (لجهاز مفقود أو خاطئ)'))
+          ws.send(JSON.stringify({ t: 'device_kick', id }));
+      } else if (act.dataset.act === 'remove') {
+        if (confirm('حذف «' + (d?.name || id) + '» من السجل؟'))
+          ws.send(JSON.stringify({ t: 'device_remove', id }));
+      }
+      return;
+    }
+    const b = e.target.closest('.drv'); if (b) selectDriver(b.dataset.id, true);
+  });
   function selectDriver(id, fly) {
     selected = selected === id ? null : id;
     const d = drivers.get(id);
@@ -364,19 +390,20 @@
       const cands = [...drivers.values()].filter(d => d.online && d.last)
         .map(d => ({ d, km: havKm(d.last, o.dest) })).sort((a,b) => a.km - b.km);
       return `<div class="order ${selectedOrder===o.id?'sel':''}" data-id="${o.id}">
-        <div class="top"><b class="num">${o.id}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
-        <div>${o.title}</div>
-        <div class="meta">${o.driverName ? '🛵 ' + o.driverName : 'بلا موصل'} · ${age(o.createdAt)}</div>
+        <div class="top"><b class="num">${esc(o.id)}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
+        <div>${esc(o.title)}</div>
+        <div class="meta">${o.driverName ? '🛵 ' + esc(o.driverName) : o.offeredTo ? '🧕 تاليا تعرضه على ' + esc(o.offeredTo) + '…' : 'بلا موصل'} · ${age(o.createdAt)}</div>
         ${!done && o.driverId && r ? `<div class="eta num">🛣 ${r.km.toFixed(1)} كم · ⏱ ${Math.ceil(r.min)} دقيقة${r.approx ? ' (تقديري)' : ''}</div>` : ''}
         ${!done ? `<div class="acts">
           ${o.status === 'new' || !o.driverId ? `
             <select data-assign="${o.id}">
               <option value="">أسنِد إلى…</option>
-              ${cands.map((c,i) => `<option value="${c.d.id}">${c.d.name} — ${c.km.toFixed(1)} كم${i===0?' ⭐ الأقرب':''}</option>`).join('')}
-            </select>` : `
+              ${cands.map((c,i) => `<option value="${c.d.id}">${esc(c.d.name)} — ${c.km.toFixed(1)} كم${i===0?' ⭐ الأقرب':''}</option>`).join('')}
+            </select>
+            ${!o.offeredTo ? `<button data-redispatch="${o.id}">🧕 اعرضيه يا تاليا</button>` : ''}` : `
             <button data-track="${o.id}">🗺 المسار</button>
             <select data-assign="${o.id}"><option value="">نقل إلى…</option>
-              ${cands.filter(c => c.d.id !== o.driverId).map(c => `<option value="${c.d.id}">${c.d.name} — ${c.km.toFixed(1)} كم</option>`).join('')}
+              ${cands.filter(c => c.d.id !== o.driverId).map(c => `<option value="${c.d.id}">${esc(c.d.name)} — ${c.km.toFixed(1)} كم</option>`).join('')}
             </select>`}
           <button data-cancel="${o.id}">إلغاء</button>
         </div>` : ''}
@@ -388,8 +415,9 @@
     if (sel && sel.value) { ws.send(JSON.stringify({ t: 'order_assign', orderId: sel.dataset.assign, driverId: sel.value })); selectOrder(sel.dataset.assign, true); }
   });
   $('olist').addEventListener('click', e => {
-    const tr = e.target.closest('[data-track]'), cn = e.target.closest('[data-cancel]');
+    const tr = e.target.closest('[data-track]'), cn = e.target.closest('[data-cancel]'), rd = e.target.closest('[data-redispatch]');
     if (tr) selectOrder(tr.dataset.track, true);
+    else if (rd) ws.send(JSON.stringify({ t: 'order_redispatch', orderId: rd.dataset.redispatch }));
     else if (cn) ws.send(JSON.stringify({ t: 'order_status', orderId: cn.dataset.cancel, status: 'cancelled' }));
     else { const card = e.target.closest('.order'); if (card && !e.target.closest('select')) selectOrder(card.dataset.id); }
   });
@@ -448,10 +476,12 @@
         (d.trail = d.trail || []).push(m.point); if (d.trail.length > 400) d.trail.shift(); } }
       else if (m.t === 'presence') { const d = drivers.get(m.id); if (d) { d.online = m.online; d.lastSeen = m.lastSeen; } }
       else if (m.t === 'orders') { for (const o of m.orders) ordersM.set(o.id, o); for (const o of m.orders) upsertDestMarker(o); }
+      else if (m.t === 'device_removed') { const d = drivers.get(m.id); d?.marker?.remove(); drivers.delete(m.id); if (selected === m.id) selected = null; }
       else if (m.t === 'voice') { feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);
         if ($('autoPlay').checked) playVoice(m); }
       else if (m.t === 'text') feedAdd('💬 ' + m.from, m.text);
       else if (m.t === 'announce') feedAdd('📢 ' + m.from, m.text);
+      else if (m.t === 'talya') feedAdd('🧕 تاليا', m.text);
       else if (m.t === 'sos') {
         const d = drivers.get(m.id); if (d) d.sos = true;
         $('sosText').textContent = '🚨 طوارئ — ' + m.name +
@@ -477,7 +507,7 @@
     const f = $('feed');
     const div = document.createElement('div');
     div.className = 'feed-item';
-    div.innerHTML = `<b>${who}</b> <span style="color:var(--muted)">${new Date().toLocaleTimeString('ar',{hour:'2-digit',minute:'2-digit'})}</span><br>${text}` +
+    div.innerHTML = `<b>${esc(who)}</b> <span style="color:var(--muted)">${new Date().toLocaleTimeString('ar',{hour:'2-digit',minute:'2-digit'})}</span><br>${esc(text)}` +
       (audio ? ' <button style="padding:1px 8px;font-size:12px">▶</button>' : '');
     if (audio) div.querySelector('button').onclick = () => playVoice(audio);
     f.prepend(div);
