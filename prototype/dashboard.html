@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dyar Connect</title>
+<style>
+  :root{
+    direction:rtl;
+    --bg:#12151d; --surface:#1a1f2b; --surface2:#212736; --line:#2b3245;
+    --text:#e9ebf1; --muted:#98a1b4; --faint:#6b7488;
+    --accent:#e2432e; --accent-soft:#3a2320;
+    --online:#3fbf77; --busy:#e2a43c; --offline:#5b6375; --alert:#e25555;
+    --map-water:#151e2b; --map-land:#1e2634; --map-road:#39435a; --map-town:#aab3c6;
+    --chip-on:#173225; --chip-busy:#33270f; --chip-off:#242938; --chip-alert:#361b1e;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#f3f2ee; --surface:#ffffff; --surface2:#eceae4; --line:#ddd9d0;
+      --text:#22252d; --muted:#5c6270; --faint:#8b90a0;
+      --accent:#cf3322; --accent-soft:#f6ddd9;
+      --online:#1e8a4f; --busy:#b57a17; --offline:#9096a6; --alert:#c93b3b;
+      --map-water:#dbe6ee; --map-land:#efece3; --map-road:#c9c3b4; --map-town:#5c6270;
+      --chip-on:#e2f2e8; --chip-busy:#f6ecd6; --chip-off:#e9e7e0; --chip-alert:#f8e2e0;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f3f2ee; --surface:#ffffff; --surface2:#eceae4; --line:#ddd9d0;
+    --text:#22252d; --muted:#5c6270; --faint:#8b90a0;
+    --accent:#cf3322; --accent-soft:#f6ddd9;
+    --online:#1e8a4f; --busy:#b57a17; --offline:#9096a6; --alert:#c93b3b;
+    --map-water:#dbe6ee; --map-land:#efece3; --map-road:#c9c3b4; --map-town:#5c6270;
+    --chip-on:#e2f2e8; --chip-busy:#f6ecd6; --chip-off:#e9e7e0; --chip-alert:#f8e2e0;
+  }
+  *{box-sizing:border-box; margin:0}
+  body{
+    background:var(--bg); color:var(--text); direction:rtl;
+    font-family:"Segoe UI", Tahoma, "Noto Sans Arabic", Arial, sans-serif;
+    font-size:14px; line-height:1.55; min-height:100vh;
+  }
+  .num{font-variant-numeric:tabular-nums}
+  button{font:inherit; color:inherit; background:none; border:none; cursor:pointer}
+  button:focus-visible, a:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+
+  /* ---------- الهيكل ---------- */
+  .app{display:grid; grid-template-columns:220px 1fr; grid-template-rows:56px 1fr; min-height:100vh}
+  header.top{
+    grid-column:1/-1; display:flex; align-items:center; gap:16px; padding:0 18px;
+    background:var(--surface); border-bottom:1px solid var(--line);
+    position:sticky; top:0; z-index:30;
+  }
+  .logo{display:flex; align-items:baseline; gap:8px; white-space:nowrap}
+  .logo b{color:var(--accent); font-size:19px; letter-spacing:.5px}
+  .logo span{color:var(--muted); font-size:13px}
+  .kpis{display:flex; gap:8px; flex-wrap:wrap; margin-inline-start:auto}
+  .chip{display:inline-flex; align-items:center; gap:7px; padding:4px 11px; border-radius:999px;
+        font-size:12.5px; border:1px solid var(--line)}
+  .chip .dot{width:8px; height:8px; border-radius:50%}
+  .chip.on{background:var(--chip-on)} .chip.on .dot{background:var(--online)}
+  .chip.busy{background:var(--chip-busy)} .chip.busy .dot{background:var(--busy)}
+  .chip.off{background:var(--chip-off)} .chip.off .dot{background:var(--offline)}
+  .chip.alert{background:var(--chip-alert); color:var(--alert); border-color:var(--alert)}
+  .chip.alert .dot{background:var(--alert)}
+  .livebar{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted)}
+  .wave{display:inline-flex; gap:2px; align-items:flex-end; height:14px}
+  .wave i{width:3px; background:var(--online); border-radius:2px; animation:wv 1s ease-in-out infinite}
+  .wave i:nth-child(2){height:12px; animation-delay:.15s}
+  .wave i:nth-child(1){height:7px} .wave i:nth-child(3){height:9px; animation-delay:.3s}
+  @keyframes wv{50%{transform:scaleY(.45)}}
+  @media (prefers-reduced-motion: reduce){ .wave i, .pin.sos circle.ring{animation:none} }
+
+  nav.side{background:var(--surface); border-inline-end:1px solid var(--line); padding:14px 10px; display:flex; flex-direction:column; gap:2px}
+  nav.side .sec{font-size:11px; letter-spacing:.08em; color:var(--faint); padding:12px 10px 4px; text-transform:uppercase}
+  nav.side button{display:flex; align-items:center; gap:10px; text-align:start; padding:8px 10px; border-radius:8px; color:var(--muted); width:100%}
+  nav.side button:hover{background:var(--surface2); color:var(--text)}
+  nav.side button.active{background:var(--accent-soft); color:var(--accent); font-weight:600}
+  nav.side svg{width:17px; height:17px; flex:none}
+
+  main{padding:16px; overflow:auto}
+  .view{display:none} .view.show{display:block}
+  h2.vt{font-size:17px; margin-bottom:12px; display:flex; align-items:center; gap:10px}
+  h2.vt small{font-weight:400; color:var(--muted); font-size:12.5px}
+
+  /* ---------- العمليات المباشرة ---------- */
+  .ops{display:grid; grid-template-columns:1fr 295px; gap:14px; align-items:start}
+  .mapwrap{background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden; position:relative}
+  .mapsvg{display:block; width:100%; height:auto; background:var(--map-water)}
+  .maplayers{position:absolute; top:10px; inset-inline-start:10px; background:var(--surface); border:1px solid var(--line);
+             border-radius:9px; padding:8px 12px; font-size:12px; color:var(--muted); display:flex; flex-direction:column; gap:5px}
+  .maplayers label{display:flex; gap:7px; align-items:center; cursor:pointer}
+  .pin{cursor:pointer}
+  .pin circle.core{stroke-width:2}
+  .pin text{font-size:10.5px; fill:var(--text); paint-order:stroke; stroke:var(--surface); stroke-width:3px; font-weight:600}
+  .pin.sos circle.ring{animation:ring 1.4s ease-out infinite; transform-origin:center; transform-box:fill-box}
+  @keyframes ring{from{opacity:.8; transform:scale(.6)} to{opacity:0; transform:scale(2.2)}}
+
+  .stack{display:flex; flex-direction:column; gap:14px}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px}
+  .card h3{font-size:13px; color:var(--muted); font-weight:600; margin-bottom:10px}
+  .driver-head{display:flex; justify-content:space-between; align-items:center; margin-bottom:4px}
+  .driver-head b{font-size:16px}
+  .state{font-size:12px; padding:2px 9px; border-radius:999px}
+  .state.on{background:var(--chip-on); color:var(--online)}
+  .state.busy{background:var(--chip-busy); color:var(--busy)}
+  .state.sos{background:var(--chip-alert); color:var(--alert)}
+  .kv{display:grid; grid-template-columns:auto 1fr; gap:3px 12px; font-size:13px; margin:8px 0}
+  .kv dt{color:var(--muted)} .kv dd{text-align:start}
+  .btnrow{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+  .btn{padding:7px 13px; border-radius:9px; border:1px solid var(--line); background:var(--surface2); font-size:13px}
+  .btn:hover{border-color:var(--muted)}
+  .btn.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+  .btn.primary:active{transform:scale(.97)}
+  .dlist{display:flex; flex-direction:column}
+  .dlist button{display:flex; align-items:center; gap:9px; padding:7px 6px; border-radius:8px; text-align:start}
+  .dlist button:hover{background:var(--surface2)}
+  .dlist button[aria-current="true"]{background:var(--accent-soft)}
+  .dlist .dot{width:9px; height:9px; border-radius:50%; flex:none}
+  .dlist small{color:var(--muted); margin-inline-start:auto}
+
+  .chanbar{display:flex; align-items:center; gap:8px; margin-top:14px; background:var(--surface);
+           border:1px solid var(--line); border-radius:12px; padding:10px 12px; flex-wrap:wrap}
+  .chan{padding:6px 12px; border-radius:999px; border:1px solid var(--line); font-size:12.5px; color:var(--muted)}
+  .chan.active{background:var(--accent-soft); color:var(--accent); border-color:var(--accent); font-weight:600}
+  .chan.sos{color:var(--alert); border-color:var(--alert)}
+  .ptt{margin-inline-start:auto; display:flex; align-items:center; gap:10px}
+  .ptt .hint{font-size:12px; color:var(--faint)}
+  .pttbtn{width:52px; height:52px; border-radius:50%; background:var(--accent); color:#fff; display:grid; place-items:center;
+          box-shadow:0 4px 14px rgba(0,0,0,.25); user-select:none}
+  .pttbtn:active, .pttbtn.talking{background:var(--online)}
+  .pttbtn svg{width:22px; height:22px}
+
+  .sosbanner{display:none; align-items:center; gap:12px; background:var(--alert); color:#fff; border-radius:12px;
+             padding:10px 16px; margin-bottom:14px; font-weight:600}
+  .sosbanner.show{display:flex}
+  .sosbanner .btn{background:rgba(255,255,255,.15); border-color:rgba(255,255,255,.4); color:#fff}
+
+  /* ---------- جداول ---------- */
+  .tblwrap{overflow-x:auto; background:var(--surface); border:1px solid var(--line); border-radius:12px}
+  table{width:100%; border-collapse:collapse; font-size:13px; min-width:640px}
+  th{ text-align:start; font-size:11.5px; color:var(--faint); letter-spacing:.05em; padding:10px 14px; border-bottom:1px solid var(--line)}
+  td{padding:9px 14px; border-bottom:1px solid var(--line)}
+  tr:last-child td{border-bottom:none}
+  tr:hover td{background:var(--surface2)}
+  .tag{font-size:11.5px; padding:2px 8px; border-radius:6px; background:var(--surface2); border:1px solid var(--line); color:var(--muted)}
+  .tag.red{color:var(--alert); border-color:var(--alert); background:var(--chip-alert)}
+
+  /* ---------- التحليلات ---------- */
+  .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin-bottom:14px}
+  .tile{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:13px}
+  .tile .v{font-size:23px; font-weight:700} .tile .l{font-size:12px; color:var(--muted)}
+  .bars{display:flex; align-items:flex-end; gap:6px; height:130px; padding:8px 4px 0}
+  .bars .b{flex:1; background:var(--accent); opacity:.85; border-radius:4px 4px 0 0; min-width:10px}
+  .bars .b.dim{background:var(--offline); opacity:.5}
+  .bxl{display:flex; gap:6px; font-size:10.5px; color:var(--faint); padding:6px 4px 0}
+  .bxl span{flex:1; text-align:center; min-width:10px}
+
+  .vault-item{display:flex; gap:12px; padding:11px 4px; border-bottom:1px solid var(--line); align-items:flex-start}
+  .vault-item:last-child{border-bottom:none}
+  .play{width:34px; height:34px; border-radius:50%; background:var(--surface2); border:1px solid var(--line); display:grid; place-items:center; flex:none}
+  .play:hover{border-color:var(--accent); color:var(--accent)}
+  .vault-item .meta{font-size:12px; color:var(--muted)}
+  .vault-item .tr-text{font-size:13px; margin-top:2px}
+  .note{font-size:12.5px; color:var(--muted); margin-top:10px}
+
+  @media (max-width:900px){
+    .app{grid-template-columns:64px 1fr}
+    nav.side button span, nav.side .sec{display:none}
+    .ops{grid-template-columns:1fr}
+  }
+</style>
+
+<div class="app">
+  <header class="top">
+    <div class="logo"><b>DYAR</b><span>Connect · غرفة العمليات</span></div>
+    <div class="livebar"><span class="wave"><i></i><i></i><i></i></span> يتحدث الآن: <b>محمد — قناة البعنة</b></div>
+    <div class="kpis">
+      <span class="chip on"><span class="dot"></span><span class="num">143</span> متصل</span>
+      <span class="chip busy"><span class="dot"></span><span class="num">21</span> في توصيلة</span>
+      <span class="chip off"><span class="dot"></span><span class="num">7</span> غير متصل</span>
+      <button class="chip alert" id="sosDemo" title="عرض تجريبي لتنبيه الطوارئ"><span class="dot"></span> طوارئ <span class="num">0</span></button>
+    </div>
+  </header>
+
+  <nav class="side" aria-label="الأقسام">
+    <button class="active" data-v="ops"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><path d="M9 7v13M15 4v13"/></svg><span>العمليات المباشرة</span></button>
+    <button data-v="users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15.5 14.5c2.6.1 4.7 1.6 5.5 4.5"/></svg><span>المستخدمون</span></button>
+    <button data-v="channels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>القنوات</span></button>
+    <button data-v="vault"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M12 10.5v1.5l1 1"/></svg><span>أرشيف الرسائل</span></button>
+    <div class="sec">التقارير</div>
+    <button data-v="analytics"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 20V9M10 20V4M16 20v-8M21 20H3"/></svg><span>التحليلات</span></button>
+    <button data-v="signin"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 3h5v18h-5M3 12h12M11 8l4 4-4 4"/></svg><span>تقرير الدخول</span></button>
+    <button data-v="audit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3h8l3 3v15H5V6l3-3z"/><path d="M9 11h6M9 15h6"/></svg><span>سجل التدقيق</span></button>
+  </nav>
+
+  <main>
+    <div class="sosbanner" id="sosBanner" role="alert">
+      🔴 طوارئ — أحمد (DYR-034) ضغط زر SOS قرب مجد الكروم · GPS مفتوح · التسجيل جارٍ
+      <button class="btn" id="sosAck">تم التعامل</button>
+    </div>
+
+    <!-- ============ العمليات المباشرة ============ -->
+    <section class="view show" id="v-ops">
+      <div class="ops">
+        <div>
+          <div class="mapwrap">
+            <svg class="mapsvg" viewBox="0 0 760 470" role="img" aria-label="خريطة حية لمواقع الموصلين في منطقة الجليل">
+              <rect width="760" height="470" fill="var(--map-water)"/>
+              <path d="M150 0 C135 60 148 120 138 180 C128 250 142 320 132 390 L128 470 L760 470 L760 0 Z" fill="var(--map-land)"/>
+              <g stroke="var(--map-road)" stroke-width="3" fill="none" opacity=".9">
+                <path d="M140 200 C240 190 340 205 470 195 C570 188 660 200 760 192"/>
+                <path d="M150 90 C250 110 330 160 400 200 M400 200 C470 245 560 270 660 300"/>
+                <path d="M300 60 C310 130 320 200 315 300 C312 360 320 420 318 470"/>
+                <path d="M470 195 C480 260 475 330 485 400"/>
+              </g>
+              <g fill="var(--map-town)" font-size="12">
+                <circle cx="152" cy="128" r="3"/><text x="164" y="132">عكا</text>
+                <circle cx="418" cy="176" r="3"/><text x="430" y="168">البعنة</text>
+                <circle cx="470" cy="150" r="3"/><text x="482" y="146">دير الأسد</text>
+                <circle cx="392" cy="230" r="3"/><text x="404" y="244">مجد الكروم</text>
+                <circle cx="560" cy="240" r="3"/><text x="572" y="252">كرمئيل</text>
+                <circle cx="210" cy="330" r="3"/><text x="222" y="342">شفاعمرو</text>
+              </g>
+              <g id="pins"></g>
+            </svg>
+            <div class="maplayers">
+              <label><input type="checkbox" checked> مسارات الطلبات</label>
+              <label><input type="checkbox" checked> أسماء السائقين</label>
+              <label><input type="checkbox"> إخفاء المواقع القديمة</label>
+              <label><input type="checkbox"> حدود المناطق</label>
+            </div>
+          </div>
+
+          <div class="chanbar">
+            <button class="chan active">العمليات العامة</button>
+            <button class="chan">البعنة</button>
+            <button class="chan">دير الأسد</button>
+            <button class="chan">مجد الكروم</button>
+            <button class="chan">كرمئيل</button>
+            <button class="chan">دعم المطاعم</button>
+            <button class="chan sos">الطوارئ</button>
+            <div class="ptt">
+              <span class="hint" id="pttHint">اضغط مطولًا للبث — أو المسطرة</span>
+              <button class="pttbtn" id="pttBtn" aria-label="زر التحدث">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card" id="driverCard">
+            <div class="driver-head"><b id="dcName">محمد — DYR-051</b><span class="state busy" id="dcState">في توصيلة</span></div>
+            <dl class="kv">
+              <dt>الطلب الجاري</dt><dd class="num" id="dcOrder">‎#18291 · المطعم ← الزبون</dd>
+              <dt>الوصول المتوقع</dt><dd class="num" id="dcEta">14 دقيقة</dd>
+              <dt>البطارية</dt><dd class="num" id="dcBat">72٪</dd>
+              <dt>الشبكة</dt><dd id="dcNet">LTE ●●●●</dd>
+              <dt>آخر إحداثية</dt><dd class="num" id="dcGps">قبل 3 ثوانٍ</dd>
+            </dl>
+            <div class="btnrow">
+              <button class="btn primary">🎙 تحدث</button>
+              <button class="btn">نداء</button>
+              <button class="btn">رسالة</button>
+              <button class="btn">الطلب</button>
+              <button class="btn">سجل اليوم</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>الموصلون النشطون</h3>
+            <div class="dlist" id="dlist"></div>
+          </div>
+
+          <div class="card">
+            <h3>آخر البثوث</h3>
+            <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">محمد · البعنة · قبل دقيقة · <span class="num">0:07</span></div><div class="tr-text">«المطعم يقول الطلب سيتأخر عشر دقائق»</div><div class="meta">AI: تأخير مطعم ← حُدّث الطلب <span class="num">#18291</span> وأُعيد حساب ETA</div></div></div>
+            <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">سارة · كرمئيل · قبل 4 دقائق · <span class="num">0:04</span></div><div class="tr-text">«استلمت الطلب، بطريقي للزبون»</div></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ المستخدمون ============ -->
+    <section class="view" id="v-users">
+      <h2 class="vt">المستخدمون <small>مرآة مباشرة لحسابات Dyar — لا إدارة مزدوجة</small></h2>
+      <div class="tblwrap"><table>
+        <thead><tr><th>الاسم</th><th>الدور</th><th>الجهاز</th><th>الإصدار</th><th>الحالة</th><th>البطارية</th><th>آخر ظهور</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>أمين أبو هيكل</td><td><span class="tag">Admin</span></td><td>Galaxy S24 · Web</td><td class="num">1.4.2</td><td><span class="state on">متصل</span></td><td class="num">—</td><td>الآن</td><td><button class="btn">إدارة</button></td></tr>
+          <tr><td>محمد</td><td><span class="tag">Driver</span></td><td>UR5</td><td class="num">1.4.2</td><td><span class="state busy">في توصيلة</span></td><td class="num">72٪</td><td>قبل 3ث</td><td><button class="btn">إدارة</button></td></tr>
+          <tr><td>أحمد مصري</td><td><span class="tag">Driver</span></td><td>UR5</td><td class="num">1.4.1</td><td><span class="state on">متصل</span></td><td class="num">88٪</td><td>قبل 10ث</td><td><button class="btn">إدارة</button></td></tr>
+          <tr><td>سارة</td><td><span class="tag">Dispatcher</span></td><td>Web · iPhone 15</td><td class="num">1.4.2</td><td><span class="state on">متصل</span></td><td class="num">64٪</td><td>الآن</td><td><button class="btn">إدارة</button></td></tr>
+          <tr><td>خالد</td><td><span class="tag">Driver</span></td><td>Redmi 12</td><td class="num">1.3.9</td><td><span class="state sos">غير متصل</span></td><td class="num">—</td><td>قبل ساعتين</td><td><button class="btn">إدارة</button></td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">إجراءات لكل مستخدم: تعيين قنوات · تغيير دور · كتم مؤقت · إسقاط جلسة (لجهاز مفقود) · دعوة جهاز جديد برمز QR.</p>
+    </section>
+
+    <!-- ============ القنوات ============ -->
+    <section class="view" id="v-channels">
+      <h2 class="vt">القنوات <small>ثابتة حسب المناطق + قنوات مؤقتة لكل طلب</small></h2>
+      <div class="tblwrap"><table>
+        <thead><tr><th>القناة</th><th>النوع</th><th>الأعضاء</th><th>التسجيل</th><th>الأولوية الافتراضية</th><th>نشاط اليوم</th></tr></thead>
+        <tbody>
+          <tr><td>العمليات العامة</td><td><span class="tag">ثابتة</span></td><td class="num">171</td><td>مفعّل</td><td class="num">P1</td><td class="num">312 بثًا</td></tr>
+          <tr><td>البعنة</td><td><span class="tag">منطقة</span></td><td>قاعدة: سائقو البعنة</td><td>مفعّل</td><td class="num">P1</td><td class="num">84 بثًا</td></tr>
+          <tr><td>دير الأسد</td><td><span class="tag">منطقة</span></td><td>قاعدة: سائقو دير الأسد</td><td>مفعّل</td><td class="num">P1</td><td class="num">61 بثًا</td></tr>
+          <tr><td>دعم المطاعم</td><td><span class="tag">ثابتة</span></td><td class="num">28</td><td>مفعّل</td><td class="num">P2</td><td class="num">45 بثًا</td></tr>
+          <tr><td>الطوارئ</td><td><span class="tag red">طوارئ</span></td><td>الجميع</td><td>إجباري</td><td class="num">P3</td><td class="num">1 بث</td></tr>
+          <tr><td class="num">ORDER-18291</td><td><span class="tag">مؤقتة</span></td><td>محمد · سارة · AI</td><td>مفعّل</td><td class="num">P2</td><td>تُغلق مع الطلب</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <!-- ============ الأرشيف ============ -->
+    <section class="view" id="v-vault">
+      <h2 class="vt">أرشيف الرسائل <small>كل بث مسجّل ومفرّغ نصيًا — ابحث داخل الصوت</small></h2>
+      <div class="card">
+        <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">اليوم 14:31 · محمد · البعنة · <span class="num">0:07</span> · مرتبط بالطلب <span class="num">#18291</span></div><div class="tr-text">«المطعم يقول الطلب سيتأخر عشر دقائق»</div><div class="meta">النية: تأخير مطعم · إجراء آلي: تحديث ETA + تسجيل حادثة</div></div></div>
+        <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">اليوم 14:27 · سارة → محمد (خاص) · <span class="num">0:05</span></div><div class="tr-text">«تم تسجيل تأخير عشر دقائق للطلب، الزبون أُبلغ»</div></div></div>
+        <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">اليوم 13:58 · أحمد مصري · مجد الكروم · <span class="num">0:09</span></div><div class="tr-text">«في ازدحام على مدخل البلد، خذوا الطريق الفوقاني»</div></div></div>
+        <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">اليوم 13:12 · خالد · دعم المطاعم · <span class="num">0:06</span></div><div class="tr-text">«مطعم الشام ما جهز الطلب لسا، بنتظر خمس دقائق»</div></div></div>
+      </div>
+      <p class="note">سياسة الاحتفاظ بيدنا (مثلاً 90 يومًا) — لا رسوم إضافية ولا حدود خطة.</p>
+    </section>
+
+    <!-- ============ التحليلات ============ -->
+    <section class="view" id="v-analytics">
+      <h2 class="vt">التحليلات <small>اليوم — الأربعاء 14/08</small></h2>
+      <div class="tiles">
+        <div class="tile"><div class="v num">642</div><div class="l">بث صوتي اليوم</div></div>
+        <div class="tile"><div class="v num">0.4s</div><div class="l">متوسط زمن الالتقاط</div></div>
+        <div class="tile"><div class="v num">38s</div><div class="l">متوسط استجابة الديسباتشر</div></div>
+        <div class="tile"><div class="v num">14</div><div class="l">مشاكل طلبات مبلغة صوتيًا</div></div>
+        <div class="tile"><div class="v num">1</div><div class="l">حادثة SOS (أُغلقت في 4 د)</div></div>
+      </div>
+      <div class="card">
+        <h3>حجم البث حسب الساعة</h3>
+        <div class="bars" aria-hidden="true">
+          <div class="b dim" style="height:14%"></div><div class="b dim" style="height:8%"></div><div class="b dim" style="height:6%"></div>
+          <div class="b" style="height:22%"></div><div class="b" style="height:35%"></div><div class="b" style="height:52%"></div>
+          <div class="b" style="height:78%"></div><div class="b" style="height:100%"></div><div class="b" style="height:88%"></div>
+          <div class="b" style="height:64%"></div><div class="b" style="height:71%"></div><div class="b" style="height:90%"></div>
+        </div>
+        <div class="bxl"><span>8</span><span>9</span><span>10</span><span>11</span><span>12</span><span>13</span><span>14</span><span>15</span><span>16</span><span>17</span><span>18</span><span>19</span></div>
+        <p class="note">تقرير خاص بديار: أكثر المطاعم تسببًا بتأخيرات مبلغة صوتيًا هذا الأسبوع — مطعم الشام (6)، أبو فادي (4).</p>
+      </div>
+    </section>
+
+    <!-- ============ تقرير الدخول ============ -->
+    <section class="view" id="v-signin">
+      <h2 class="vt">تقرير تسجيل الدخول</h2>
+      <div class="tblwrap"><table>
+        <thead><tr><th>المستخدم</th><th>الجهاز</th><th>الإصدار</th><th>IP</th><th>الدخول</th><th>الخروج</th><th>المدة</th><th>سبب الانقطاع</th></tr></thead>
+        <tbody>
+          <tr><td>محمد</td><td>UR5</td><td class="num">1.4.2</td><td class="num">100.64.12.9</td><td class="num">07:58</td><td>—</td><td class="num">6:17</td><td>—</td></tr>
+          <tr><td>أحمد مصري</td><td>UR5</td><td class="num">1.4.1</td><td class="num">100.64.20.3</td><td class="num">08:03</td><td>—</td><td class="num">6:12</td><td>—</td></tr>
+          <tr><td>خالد</td><td>Redmi 12</td><td class="num">1.3.9</td><td class="num">100.64.31.7</td><td class="num">09:15</td><td class="num">12:14</td><td class="num">2:59</td><td>انقطاع شبكة (×4 اليوم)</td></tr>
+          <tr><td>سارة</td><td>Web — Chrome</td><td class="num">1.4.2</td><td class="num">85.250.4.18</td><td class="num">07:45</td><td>—</td><td class="num">6:30</td><td>—</td></tr>
+        </tbody>
+      </table></div>
+      <p class="note">تنبيه آلي عند تكرار الانقطاع: جهاز خالد فقد الاتصال 4 مرات اليوم — افحص الشريحة أو الجهاز.</p>
+    </section>
+
+    <!-- ============ سجل التدقيق ============ -->
+    <section class="view" id="v-audit">
+      <h2 class="vt">سجل التدقيق <small>غير قابل للتعديل — كل إجراء إداري موثّق</small></h2>
+      <div class="tblwrap"><table>
+        <thead><tr><th>الوقت</th><th>المنفّذ</th><th>الإجراء</th><th>الهدف</th></tr></thead>
+        <tbody>
+          <tr><td class="num">14:32</td><td>ai-dispatcher</td><td>تحديث ETA + تسجيل حادثة تأخير</td><td class="num">طلب #18291</td></tr>
+          <tr><td class="num">14:05</td><td>سارة</td><td>استماع لتسجيل من الأرشيف</td><td>بث محمد 13:58</td></tr>
+          <tr><td class="num">12:40</td><td>أمين</td><td>إغلاق تنبيه طوارئ — «تم التعامل»</td><td>SOS · DYR-034</td></tr>
+          <tr><td class="num">11:22</td><td>أمين</td><td>تغيير دور</td><td>سارة: Driver ← Dispatcher</td></tr>
+          <tr><td class="num">09:10</td><td>سارة</td><td>إسقاط جلسة (جهاز مفقود)</td><td>UR5 · DYR-019</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+  </main>
+</div>
+
+<script>
+  // تنقل الأقسام
+  const navBtns = document.querySelectorAll('nav.side button');
+  navBtns.forEach(b => b.addEventListener('click', () => {
+    navBtns.forEach(x => x.classList.toggle('active', x === b));
+    document.querySelectorAll('.view').forEach(v => v.classList.toggle('show', v.id === 'v-' + b.dataset.v));
+  }));
+
+  // بيانات تجريبية للسائقين
+  const drivers = [
+    {id:'DYR-051', name:'محمد',       st:'busy', x:404, y:214, order:'‎#18291 · المطعم ← الزبون', eta:'14 دقيقة', bat:'72٪', net:'LTE ●●●●', gps:'قبل 3 ثوانٍ'},
+    {id:'DYR-022', name:'أحمد مصري', st:'on',   x:470, y:168, order:'—', eta:'—', bat:'88٪', net:'LTE ●●●○', gps:'قبل 10 ثوانٍ'},
+    {id:'DYR-013', name:'سارة',       st:'busy', x:556, y:258, order:'‎#18304 · بطريقها للزبون', eta:'6 دقائق', bat:'64٪', net:'5G ●●●●', gps:'قبل ثانيتين'},
+    {id:'DYR-034', name:'أحمد',       st:'on',   x:352, y:250, order:'—', eta:'—', bat:'91٪', net:'LTE ●●○○', gps:'قبل 5 ثوانٍ'},
+    {id:'DYR-047', name:'يوسف',      st:'on',   x:214, y:150, order:'—', eta:'—', bat:'55٪', net:'LTE ●●●○', gps:'قبل 8 ثوانٍ'},
+  ];
+  const stColor = s => s==='busy' ? 'var(--busy)' : s==='sos' ? 'var(--alert)' : 'var(--online)';
+  const stText  = s => s==='busy' ? 'في توصيلة' : s==='sos' ? 'طوارئ' : 'متصل';
+
+  const pins = document.getElementById('pins');
+  const dlist = document.getElementById('dlist');
+  function render(){
+    pins.innerHTML = drivers.map(d => `
+      <g class="pin${d.st==='sos'?' sos':''}" data-id="${d.id}" tabindex="0" role="button" aria-label="${d.name}">
+        ${d.st==='sos' ? `<circle class="ring" cx="${d.x}" cy="${d.y}" r="10" fill="none" stroke="var(--alert)" stroke-width="2"/>` : ''}
+        <circle class="core" cx="${d.x}" cy="${d.y}" r="7" fill="${stColor(d.st)}" stroke="var(--surface)"/>
+        <text x="${d.x+12}" y="${d.y+4}">${d.name}${d.order!=='—' ? ' · ' + d.order.split(' ')[0] : ''}</text>
+      </g>`).join('');
+    dlist.innerHTML = drivers.map(d => `
+      <button data-id="${d.id}" ${d.id===sel?'aria-current="true"':''}>
+        <span class="dot" style="background:${stColor(d.st)}"></span>${d.name}
+        <small class="num">${d.id}</small>
+      </button>`).join('');
+  }
+  let sel = 'DYR-051';
+  function select(id){
+    sel = id;
+    const d = drivers.find(x => x.id === id);
+    dcName.textContent = `${d.name} — ${d.id}`;
+    dcState.textContent = stText(d.st);
+    dcState.className = 'state ' + (d.st==='busy'?'busy':d.st==='sos'?'sos':'on');
+    dcOrder.textContent = d.order; dcEta.textContent = d.eta;
+    dcBat.textContent = d.bat; dcNet.textContent = d.net; dcGps.textContent = d.gps;
+    render();
+  }
+  document.addEventListener('click', e => {
+    const p = e.target.closest('.pin, .dlist button');
+    if (p) select(p.dataset.id);
+  });
+  render();
+
+  // زر التحدث (محاكاة)
+  const pttBtn = document.getElementById('pttBtn'), pttHint = document.getElementById('pttHint');
+  const talk = on => { pttBtn.classList.toggle('talking', on);
+    pttHint.textContent = on ? '🔴 يبث الآن في: العمليات العامة' : 'اضغط مطولًا للبث — أو المسطرة'; };
+  pttBtn.addEventListener('pointerdown', () => talk(true));
+  ['pointerup','pointerleave'].forEach(ev => pttBtn.addEventListener(ev, () => talk(false)));
+  document.addEventListener('keydown', e => { if (e.code==='Space' && !e.repeat && e.target===document.body){ e.preventDefault(); talk(true);} });
+  document.addEventListener('keyup',   e => { if (e.code==='Space' && e.target===document.body) talk(false); });
+
+  // عرض تجريبي للطوارئ
+  const banner = document.getElementById('sosBanner');
+  document.getElementById('sosDemo').addEventListener('click', () => {
+    banner.classList.add('show');
+    const d = drivers.find(x => x.id==='DYR-034'); d.st='sos'; select('DYR-034');
+  });
+  document.getElementById('sosAck').addEventListener('click', () => {
+    banner.classList.remove('show');
+    const d = drivers.find(x => x.id==='DYR-034'); d.st='on'; select('DYR-034');
+  });
+</script>
+
+</html>
