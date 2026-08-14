@@ -57,8 +57,14 @@ TLS_CERT=cert.pem TLS_KEY=key.pem npm start
 ```
 افتح `https://192.168.x.x:8080` على الجهاز واقبل تحذير الشهادة (مرة واحدة لكل جهاز).
 
-**ج) الحل الدائم (الإنتاج):** خادم VPS (مثل Hetzner) + نطاق فرعي `connect.dyar.tv`
-خلف Caddy — شهادة صحيحة تلقائيًا، والأجهزة تتصل من أي مكان عبر شبكة الجوال، ليس فقط Wi-Fi.
+**ج) الحل الدائم — النشر على Render بضغطة واحدة (مُجهَّز):**
+
+1. افتح: **https://render.com/deploy?repo=https://github.com/matrix09876/Dyar.tv** (بنفس حساب Render الذي عليه غرفة التشغيل).
+2. Render يقرأ `render.yaml` تلقائيًا — أدخل قيمة `DYAR_PIN` (رمز ربط الأجهزة) واضغط Deploy.
+3. بعد دقائق يصبح لديك رابط دائم مثل `https://dyar-connect.onrender.com` — **HTTPS جاهز، فيعمل GPS والمايك مباشرة**، والأجهزة تتصل من أي مكان عبر شبكة الجوال.
+4. **لتفعيل الجسر مع غرفة التشغيل:** انسخ قيمة `BRAIN_API_KEY` (ولّدها Render في خدمة dyar-connect) وأضفها في خدمة `egint-support` على Render كمتغيرين: `CONNECT_API_KEY` = نفس القيمة، و`CONNECT_URL` = رابط خدمة dyar-connect. (فرع الجسر في مستودع egint-support: `claude/dyar-connect-bridge` — ادمجه في main فينشر تلقائيًا.)
+
+بديل: خادم VPS (مثل Hetzner) + نطاق `connect.dyar.tv` خلف Caddy — نفس النتيجة بتحكم أكبر.
 
 ## 4. عن الدقة «بالمتر» — بصراحة تقنية
 

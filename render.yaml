@@ -1,0 +1,24 @@
+# نشر Dyar Connect على Render بضغطة واحدة:
+#   https://render.com/deploy?repo=https://github.com/matrix09876/Dyar.tv
+# بعد النشر يصبح للخدمة رابط HTTPS دائم (مثل https://dyar-connect.onrender.com)
+# فيعمل GPS والمايكروفون على UR5 وكل الهواتف مباشرة عبر شبكة الجوال — بلا أنفاق ولا شهادات.
+services:
+  - type: web
+    name: dyar-connect
+    runtime: node
+    rootDir: server
+    plan: starter            # free يكفي للتجربة لكنه ينام بعد الخمول — للتشغيل الميداني starter
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: "20"
+      - key: DYAR_PIN
+        sync: false          # رمز ربط الأجهزة — اختر رمزاً قصيراً يسهل إدخاله على UR5
+      - key: BRAIN_API_KEY
+        generateValue: true  # يولده Render — انسخه إلى CONNECT_API_KEY في خدمة egint-support
+      - key: BRAIN_PANEL_URL
+        value: https://egint-support.onrender.com
+      - key: BRAIN_WEBHOOK_URL
+        value: https://egint-support.onrender.com/webhooks/dyar-connect
