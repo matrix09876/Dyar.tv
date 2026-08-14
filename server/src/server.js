@@ -24,8 +24,11 @@ const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة الع�
 const pinOk = (got, want) => { const a = Buffer.from(String(got || '')), b = Buffer.from(String(want));
   return a.length === b.length && timingSafeEqual(a, b); };
 const BRAIN_API_KEY = process.env.BRAIN_API_KEY || 'dyar-brain-key';
-const BRAIN_WEBHOOK_URL = process.env.BRAIN_WEBHOOK_URL || '';
 const BRAIN_PANEL_URL = process.env.BRAIN_PANEL_URL || 'https://egint-support.onrender.com';
+const BRAIN_WEBHOOK_URL = process.env.BRAIN_WEBHOOK_URL
+  || (BRAIN_PANEL_URL ? BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect' : '');
+// عنوان هذه الخدمة العلني — Render يوفره تلقائياً (RENDER_EXTERNAL_URL) — لازم للتسجيل الذاتي لدى غرفة التشغيل
+const SELF_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 const PUB = fileURLToPath(new URL('../public', import.meta.url));
 
 // ---------- الحالة (MVP بالذاكرة — الإنتاج: PostgreSQL + Redis) ----------
@@ -148,6 +151,29 @@ function brainEvent(event, payload) {
     body: JSON.stringify({ event, at: Date.now(), ...payload }),
   }).catch(() => {});
 }
+
+// ---------- تسجيل ذاتي لدى غرفة التشغيل (Zero-Config) ----------
+// نرسل عنواننا ومفتاحنا عند الإقلاع ثم كنبض كل 10 دقائق — فترتبط الخدمتان بلا أي إعداد يدوي.
+// يعمل فقط عندما يكون BRAIN_API_KEY مضبوطاً بالبيئة (على Render يولَّد تلقائياً من blueprint).
+let brainRegistered = false;
+async function registerWithBrain() {
+  if (!SELF_URL || !BRAIN_PANEL_URL || !process.env.BRAIN_API_KEY) return;
+  try {
+    const r = await fetch(BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect-register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: SELF_URL, key: BRAIN_API_KEY }),
+      signal: AbortSignal.timeout(8000),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && !brainRegistered) {
+      brainRegistered = true;
+      console.log(`[🧠] مسجّل لدى غرفة التشغيل${j.first ? ' (ربط أول)' : ''}: ${BRAIN_PANEL_URL}`);
+    }
+    if (!r.ok) console.warn('[🧠] رفضت غرفة التشغيل التسجيل:', j.reason || r.status);
+  } catch (e) { if (!brainRegistered) console.warn('[🧠] تعذر التسجيل لدى غرفة التشغيل:', e.message); }
+}
+setInterval(registerWithBrain, 10 * 60_000);
 
 // ---------- HTTP: ملفات + REST للوحة العقل ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' };
@@ -404,4 +430,5 @@ server.listen(PORT, () => {
   console.log(`  REST للعقل:    GET /api/v1/drivers · POST /api/v1/announce  (x-api-key)`);
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');
+  registerWithBrain();   // ربط ذاتي فوري بغرفة التشغيل
 });
