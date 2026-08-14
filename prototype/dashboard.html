@@ -162,7 +162,26 @@
   .vault-item .tr-text{font-size:13px; margin-top:2px}
   .note{font-size:12.5px; color:var(--muted); margin-top:10px}
 
+  /* ---------- الموزع الذكي ---------- */
+  .brain-grid{display:grid; grid-template-columns:1fr 340px; gap:14px; align-items:start}
+  .modes{display:flex; gap:6px; margin-inline-start:auto}
+  .mode{padding:5px 12px; border-radius:999px; border:1px solid var(--line); font-size:12px; color:var(--muted)}
+  .mode.active{background:var(--accent-soft); color:var(--accent); border-color:var(--accent); font-weight:600}
+  .order-status{font-size:12px; padding:3px 10px; border-radius:999px; background:var(--chip-busy); color:var(--busy)}
+  .order-status.done{background:var(--chip-on); color:var(--online)}
+  .radio{display:flex; flex-direction:column; gap:8px; margin-top:4px}
+  .msg{max-width:88%; padding:8px 12px; border-radius:12px; font-size:13px; opacity:0; transform:translateY(4px);
+       transition:opacity .3s, transform .3s}
+  .msg.in{opacity:1; transform:none}
+  .msg.brain{background:var(--accent-soft); border:1px solid var(--accent); align-self:flex-start; border-start-start-radius:3px}
+  .msg.drv{background:var(--surface2); border:1px solid var(--line); align-self:flex-end; border-start-end-radius:3px}
+  .msg .who{font-size:11px; color:var(--muted); margin-bottom:2px; display:flex; gap:6px; align-items:center}
+  .cand-hi td{background:var(--accent-soft) !important}
+  .simline{stroke:var(--accent); stroke-width:2.5; stroke-dasharray:7 5; fill:none}
+  @media (prefers-reduced-motion: reduce){ .msg{transition:none} }
+
   @media (max-width:900px){
+    .brain-grid{grid-template-columns:1fr}
     .app{grid-template-columns:64px 1fr}
     nav.side button span, nav.side .sec{display:none}
     .ops{grid-template-columns:1fr}
@@ -183,6 +202,7 @@
 
   <nav class="side" aria-label="الأقسام">
     <button class="active" data-v="ops"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 20l-6-3V4l6 3 6-3 6 3v13l-6-3-6 3z"/><path d="M9 7v13M15 4v13"/></svg><span>العمليات المباشرة</span></button>
+    <button data-v="brain"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="7" y="6" width="10" height="9" rx="3"/><path d="M12 3v3M9 15v3h6v-3M4 10h3M17 10h3"/><circle cx="10" cy="10" r=".8" fill="currentColor"/><circle cx="14" cy="10" r=".8" fill="currentColor"/></svg><span>الموزّع الذكي</span></button>
     <button data-v="users"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.8-3.2 3.4-5 6.5-5s5.7 1.8 6.5 5"/><circle cx="17.5" cy="9" r="2.5"/><path d="M15.5 14.5c2.6.1 4.7 1.6 5.5 4.5"/></svg><span>المستخدمون</span></button>
     <button data-v="channels"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span>القنوات</span></button>
     <button data-v="vault"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="12" cy="12" r="3.5"/><path d="M12 10.5v1.5l1 1"/></svg><span>أرشيف الرسائل</span></button>
@@ -275,6 +295,90 @@
             <h3>آخر البثوث</h3>
             <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">محمد · البعنة · قبل دقيقة · <span class="num">0:07</span></div><div class="tr-text">«المطعم يقول الطلب سيتأخر عشر دقائق»</div><div class="meta">AI: تأخير مطعم ← حُدّث الطلب <span class="num">#18291</span> وأُعيد حساب ETA</div></div></div>
             <div class="vault-item"><button class="play" aria-label="تشغيل">▶</button><div><div class="meta">سارة · كرمئيل · قبل 4 دقائق · <span class="num">0:04</span></div><div class="tr-text">«استلمت الطلب، بطريقي للزبون»</div></div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ الموزع الذكي ============ -->
+    <section class="view" id="v-brain">
+      <h2 class="vt">الموزّع الذكي — Dyar Brain
+        <small>يستقبل الطلب، يختار أقرب موصل، ويكلمه عبر اللاسلكي</small>
+        <span class="modes" role="group" aria-label="وضع التشغيل">
+          <button class="mode">مراقب</button><button class="mode">مساعد</button><button class="mode active">آلي</button>
+        </span>
+      </h2>
+
+      <div class="tiles">
+        <div class="tile"><div class="v num" id="bkAssigned">37</div><div class="l">طلبًا أسنده Brain اليوم</div></div>
+        <div class="tile"><div class="v num">82٪</div><div class="l">قبول من العرض الأول</div></div>
+        <div class="tile"><div class="v num">19s</div><div class="l">متوسط زمن الإسناد</div></div>
+        <div class="tile"><div class="v num">3</div><div class="l">تصعيدات لمشرف بشري</div></div>
+      </div>
+
+      <div class="brain-grid">
+        <div class="stack">
+          <div class="card">
+            <div class="driver-head">
+              <b>الطلب <span class="num" id="simOrderId">#18317</span> — مطعم الشام ← دير الأسد</b>
+              <span class="order-status" id="simStatus">بانتظار المحاكاة</span>
+            </div>
+            <div class="btnrow">
+              <button class="btn primary" id="simBtn">▶ محاكاة طلب جديد</button>
+              <button class="btn" id="simReset">إعادة</button>
+              <button class="btn">تدخّل يدوي</button>
+            </div>
+            <h3 style="margin-top:14px">ترتيب المرشحين — لماذا هذا الموصل؟</h3>
+            <div class="tblwrap" style="border:none">
+              <table style="min-width:520px">
+                <thead><tr><th>#</th><th>الموصل</th><th>مسافة الطريق</th><th>ETA للمطعم</th><th>الحمل</th><th>النتيجة</th></tr></thead>
+                <tbody id="candBody">
+                  <tr><td colspan="6" style="color:var(--faint)">اضغط «محاكاة طلب جديد» لرؤية دورة الإسناد كاملة.</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div class="card">
+            <h3>المحادثة اللاسلكية</h3>
+            <div class="radio" id="radioLog" aria-live="polite"></div>
+          </div>
+        </div>
+
+        <div class="stack">
+          <div class="card" style="padding:10px">
+            <h3>خريطة الإسناد — المطعم والمرشحون</h3>
+            <svg class="mapsvg" style="border-radius:8px" viewBox="120 60 640 340" role="img" aria-label="خريطة إسناد الطلب">
+              <rect x="120" y="60" width="640" height="340" fill="var(--map-water)"/>
+              <path d="M150 0 C135 60 148 120 138 180 C128 250 142 320 132 390 L128 470 L760 470 L760 0 Z" fill="var(--map-land)"/>
+              <g stroke="var(--map-road)" stroke-width="3" fill="none" opacity=".9">
+                <path d="M140 200 C240 190 340 205 470 195 C570 188 660 200 760 192"/>
+                <path d="M150 90 C250 110 330 160 400 200 M400 200 C470 245 560 270 660 300"/>
+                <path d="M300 60 C310 130 320 200 315 300"/>
+                <path d="M470 195 C480 260 475 330 485 400"/>
+              </g>
+              <g fill="var(--map-town)" font-size="12">
+                <text x="430" y="168">البعنة</text><text x="482" y="146">دير الأسد</text>
+                <text x="404" y="244">مجد الكروم</text><text x="572" y="252">كرمئيل</text>
+              </g>
+              <path id="simPath" class="simline" d="" style="display:none"/>
+              <g id="restPin">
+                <rect x="432" y="196" width="12" height="12" rx="2" fill="var(--accent)" stroke="var(--surface)" stroke-width="2"/>
+                <text x="450" y="207" font-size="10.5" fill="var(--text)" style="paint-order:stroke; stroke:var(--surface); stroke-width:3px; font-weight:600">مطعم الشام 🍽</text>
+              </g>
+              <g id="brainPins"></g>
+            </svg>
+            <p class="note">نفس الخريطة الحية في «العمليات المباشرة» — هنا تُظهر قرار الإسناد: مربع أحمر = المطعم، الخط المتقطع = الموصل المختار.</p>
+          </div>
+          <div class="card">
+            <h3>صلاحيات الآلة (Human-in-the-loop)</h3>
+            <dl class="kv">
+              <dt>إسناد طلب عادي</dt><dd>Brain تلقائيًا</dd>
+              <dt>تأخير ≤ 15 د</dt><dd>Brain يبلّغ الزبون</dd>
+              <dt>3 رفضات</dt><dd>تصعيد لمشرف</dd>
+              <dt>إلغاء / تعويض</dt><dd>بشري فقط</dd>
+              <dt>أي إشارة طوارئ</dt><dd>بشري فورًا + P3</dd>
+            </dl>
           </div>
         </div>
       </div>
@@ -438,6 +542,67 @@
   ['pointerup','pointerleave'].forEach(ev => pttBtn.addEventListener(ev, () => talk(false)));
   document.addEventListener('keydown', e => { if (e.code==='Space' && !e.repeat && e.target===document.body){ e.preventDefault(); talk(true);} });
   document.addEventListener('keyup',   e => { if (e.code==='Space' && e.target===document.body) talk(false); });
+
+  // ====== محاكاة الموزع الذكي ======
+  const cands = [
+    {name:'محمد',       id:'DYR-051', x:404, y:214, dist:'1.9 كم', eta:'4 د',  load:1, score:94},
+    {name:'أحمد مصري', id:'DYR-022', x:470, y:168, dist:'2.6 كم', eta:'6 د',  load:0, score:91},
+    {name:'سارة',       id:'DYR-013', x:556, y:258, dist:'6.4 كم', eta:'11 د', load:1, score:63},
+  ];
+  const brainPins = document.getElementById('brainPins');
+  brainPins.innerHTML = cands.map(c => `
+    <g data-bp="${c.id}">
+      <circle cx="${c.x}" cy="${c.y}" r="7" fill="var(--online)" stroke="var(--surface)" stroke-width="2"/>
+      <text x="${c.x+11}" y="${c.y+4}" font-size="10.5" fill="var(--text)"
+            style="paint-order:stroke; stroke:var(--surface); stroke-width:3px; font-weight:600">${c.name}</text>
+    </g>`).join('');
+
+  const candBody = document.getElementById('candBody'), radioLog = document.getElementById('radioLog');
+  const simStatus = document.getElementById('simStatus'), simPath = document.getElementById('simPath');
+  let simTimers = [];
+  const after = (ms, fn) => simTimers.push(setTimeout(fn, ms));
+
+  function say(who, text, delay){
+    after(delay, () => {
+      const div = document.createElement('div');
+      div.className = 'msg ' + (who==='brain' ? 'brain' : 'drv');
+      div.innerHTML = `<div class="who">${who==='brain' ? '🤖 Dyar Brain — قناة محمد' : '🎙 محمد — UR5'}</div>${text}`;
+      radioLog.appendChild(div);
+      requestAnimationFrame(() => requestAnimationFrame(() => div.classList.add('in')));
+    });
+  }
+  function resetSim(){
+    simTimers.forEach(clearTimeout); simTimers = [];
+    radioLog.innerHTML = ''; simPath.style.display = 'none';
+    simStatus.textContent = 'بانتظار المحاكاة'; simStatus.classList.remove('done');
+    candBody.innerHTML = '<tr><td colspan="6" style="color:var(--faint)">اضغط «محاكاة طلب جديد» لرؤية دورة الإسناد كاملة.</td></tr>';
+  }
+  document.getElementById('simReset').addEventListener('click', resetSim);
+  document.getElementById('simBtn').addEventListener('click', () => {
+    resetSim();
+    simStatus.textContent = '1/4 ترشيح وترتيب…';
+    after(500, () => {
+      candBody.innerHTML = cands.map((c,i) => `
+        <tr data-cr="${c.id}"><td class="num">${i+1}</td><td>${c.name} <small class="num" style="color:var(--faint)">${c.id}</small></td>
+        <td class="num">${c.dist}</td><td class="num">${c.eta}</td><td class="num">${c.load}</td>
+        <td class="num"><b>${c.score}</b></td></tr>`).join('');
+    });
+    after(1400, () => {
+      simStatus.textContent = '2/4 نداء صوتي لأقرب موصل…';
+      document.querySelector('[data-cr="DYR-051"]').classList.add('cand-hi');
+      simPath.setAttribute('d', 'M438 202 C425 208 412 210 404 214');
+      simPath.style.display = 'block';
+    });
+    say('brain', '«محمد، طلب جديد: مطعم الشام إلى دير الأسد، المسافة 4 كم، الاستلام خلال 12 دقيقة. اضغط مرة للقبول أو قل نعم.»', 2200);
+    after(3600, () => simStatus.textContent = '3/4 بانتظار الرد…');
+    say('drv', 'ضغطة PTT قصيرة ×1 — <b>قبول</b> ✓', 4400);
+    say('brain', '«تم. الطلب 18317 لك، تفاصيله على الشاشة. بالسلامة.»', 5400);
+    after(6200, () => {
+      simStatus.textContent = '4/4 مُسنَد — تتبع ETA جارٍ'; simStatus.classList.add('done');
+      bkAssigned.textContent = 38;
+      say('brain', 'إجراء آلي: فُتحت قناة ORDER-18317 (محمد + العمليات + AI) · سُجّل القرار في سجل التدقيق مع الأسباب.', 400);
+    });
+  });
 
   // عرض تجريبي للطوارئ
   const banner = document.getElementById('sosBanner');
