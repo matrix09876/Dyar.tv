@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dyar Connect — الخريطة الحية</title>
+<link rel="stylesheet" href="/vendor/maplibre-gl.css">
+<script src="/vendor/maplibre-gl.js"></script>
+<script src="/vendor/qrcode.js"></script>
+<style>
+  :root{ --bg:#12151d; --surface:#1a1f2b; --surface2:#212736; --line:#2b3245; --text:#e9ebf1;
+         --muted:#98a1b4; --accent:#e2432e; --online:#3fbf77; --busy:#e2a43c; --alert:#e25555; --offline:#5b6375 }
+  *{box-sizing:border-box; margin:0}
+  body{background:var(--bg); color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif; height:100vh;
+       display:grid; grid-template-rows:52px 1fr; overflow:hidden}
+  .num{font-variant-numeric:tabular-nums}
+  header{display:flex; align-items:center; gap:14px; padding:0 16px; background:var(--surface); border-bottom:1px solid var(--line)}
+  header b{color:var(--accent); font-size:18px}
+  header .sub{color:var(--muted); font-size:13px}
+  .chip{display:inline-flex; align-items:center; gap:6px; padding:3px 11px; border-radius:999px;
+        font-size:12.5px; border:1px solid var(--line)}
+  .chip .dot{width:8px; height:8px; border-radius:50%}
+  #chips{display:flex; gap:8px; margin-inline-start:auto}
+  button{font:inherit; color:inherit; background:var(--surface2); border:1px solid var(--line);
+         border-radius:9px; padding:6px 12px; cursor:pointer}
+  button:hover{border-color:var(--muted)}
+  .wrap{display:grid; grid-template-columns:300px 1fr; min-height:0}
+  aside{background:var(--surface); border-inline-end:1px solid var(--line); overflow:auto; padding:12px}
+  aside h3{font-size:12.5px; color:var(--muted); margin:4px 4px 10px}
+  .drv{width:100%; text-align:start; display:flex; flex-direction:column; gap:3px; padding:10px;
+       border-radius:10px; background:none; border:1px solid transparent; margin-bottom:4px}
+  .drv:hover{background:var(--surface2)}
+  .drv.sel{border-color:var(--accent); background:var(--surface2)}
+  .drv .row1{display:flex; align-items:center; gap:8px; font-weight:600}
+  .drv .dot{width:9px; height:9px; border-radius:50%; flex:none}
+  .drv .meta{font-size:12px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap}
+  .acc-good{color:var(--online)} .acc-mid{color:var(--busy)} .acc-bad{color:var(--alert)}
+  #map{min-height:0}
+  .marker{width:16px; height:16px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 1px 6px rgba(0,0,0,.5); cursor:pointer}
+  .mlabel{position:absolute; top:18px; right:50%; transform:translateX(50%); white-space:nowrap; font-size:11.5px;
+          font-weight:700; color:#111; background:rgba(255,255,255,.92); padding:1px 7px; border-radius:6px;
+          box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  dialog{background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:14px;
+         padding:22px; max-width:360px; text-align:center}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  dialog input{width:100%; padding:11px; margin:14px 0; border-radius:9px; border:1px solid var(--line);
+               background:var(--bg); color:var(--text); font-size:15px; text-align:center}
+  dialog .qr{background:#fff; padding:12px; border-radius:10px; display:inline-block; margin:12px 0}
+  dialog .link{font-size:12px; color:var(--muted); word-break:break-all; direction:ltr}
+  .empty{color:var(--muted); font-size:13px; padding:14px; line-height:1.7}
+</style>
+</head>
+<body>
+<header>
+  <b>DYAR</b><span class="sub">Connect · الخريطة الحية — دقة بالمتر</span>
+  <div id="chips">
+    <span class="chip"><span class="dot" style="background:var(--online)"></span><span class="num" id="cOn">0</span> متصل</span>
+    <span class="chip"><span class="dot" style="background:var(--offline)"></span><span class="num" id="cOff">0</span> غير متصل</span>
+    <button id="talkBtn" title="اضغط مطولًا للتحدث لكل الأجهزة">🎙 تحدث</button>
+    <button id="addBtn">➕ إضافة جهاز</button>
+    <a id="brainLink" target="_blank" rel="noopener"
+       style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 12px;text-decoration:none;color:var(--text)">🧠 لوحة العقل ↗</a>
+  </div>
+</header>
+
+<div id="sosBanner" style="display:none; position:absolute; top:52px; right:0; left:0; z-index:40;
+     background:var(--alert); color:#fff; padding:10px 18px; font-weight:700; align-items:center; gap:14px">
+  <span id="sosText">🚨 طوارئ</span>
+  <button id="sosAck" style="background:rgba(255,255,255,.18); border-color:rgba(255,255,255,.5); color:#fff">تم التعامل</button>
+</div>
+
+<div class="wrap">
+  <aside>
+    <h3>البث الحي <label style="float:left;font-weight:400"><input type="checkbox" id="autoPlay" checked> تشغيل تلقائي</label></h3>
+    <div id="feed" style="display:flex;flex-direction:column;gap:5px;margin-bottom:14px;max-height:170px;overflow:auto">
+      <div class="empty" style="padding:6px">لا بثوث بعد — البثوث الصوتية والرسائل تظهر هنا وتُشغَّل فورًا.</div>
+    </div>
+    <h3>الأجهزة والموصلون</h3>
+    <div id="dlist"><div class="empty">لا أجهزة بعد.<br>اضغط «إضافة جهاز» وامسح الرمز من هاتف الموصل أو جهاز UR5.</div></div>
+  </aside>
+  <div id="map"></div>
+</div>
+
+<dialog id="pinDlg">
+  <h3>دخول لوحة التحكم</h3>
+  <input id="pinInput" placeholder="رمز PIN" inputmode="numeric">
+  <button id="pinGo" style="background:var(--accent); border:none; color:#fff; width:100%; padding:11px">دخول</button>
+</dialog>
+
+<dialog id="addDlg">
+  <h3>إضافة جهاز جديد</h3>
+  <p style="font-size:13px; color:var(--muted); margin-top:8px">
+    على جهاز الموصل (UR5 أو أي هاتف): امسح الرمز أو افتح الرابط،
+    أدخل اسم الموصل ورمز PIN — يظهر على الخريطة فورًا.</p>
+  <div class="qr" id="qrBox"></div>
+  <div class="link" id="drvLink"></div>
+  <button onclick="addDlg.close()" style="margin-top:14px">إغلاق</button>
+</dialog>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const drivers = new Map();           // id -> بيانات + marker
+  let selected = null, follow = false, map, ws, pin = sessionStorage.pin || '';
+
+  // ---------- الخريطة الحقيقية: MapLibre + OpenStreetMap ----------
+  try{ map = new maplibregl.Map({
+    container: 'map',
+    center: [35.30, 32.92],            // منطقة الجليل: البعنة / دير الأسد / مجد الكروم / كرمئيل
+    zoom: 12,
+    attributionControl: true,
+    style: {
+      version: 8,
+      sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+                        tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap contributors' } },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
+    },
+  });
+  map.addControl(new maplibregl.NavigationControl(), 'top-left');
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left'); // مسطرة بالمتر
+  } catch(e){ map = null; $('map').innerHTML = '<p style="padding:20px;color:var(--muted)">تعذر تحميل الخريطة — القائمة الجانبية تعمل. ' + e.message + '</p>'; }
+
+  map && map.on('load', () => {
+    // دوائر دقة GPS (بالمتر الحقيقي) + خطوط المسار
+    map.addSource('acc', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'acc-fill', type: 'fill', source: 'acc',
+      paint: { 'fill-color': '#3fbf77', 'fill-opacity': 0.14 } });
+    map.addLayer({ id: 'acc-line', type: 'line', source: 'acc',
+      paint: { 'line-color': '#3fbf77', 'line-opacity': 0.5, 'line-width': 1.5 } });
+    map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addLayer({ id: 'trails', type: 'line', source: 'trails',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#e2432e', 'line-width': 3, 'line-opacity': 0.75 } });
+  });
+
+  // دائرة جغرافية حقيقية نصف قطرها = دقة الجهاز بالمتر
+  function accCircle(lng, lat, meters) {
+    const pts = [], R = 6371000, d = meters / R, lat1 = lat * Math.PI/180, lng1 = lng * Math.PI/180;
+    for (let i = 0; i <= 48; i++) {
+      const b = i / 48 * 2 * Math.PI;
+      const lat2 = Math.asin(Math.sin(lat1)*Math.cos(d) + Math.cos(lat1)*Math.sin(d)*Math.cos(b));
+      const lng2 = lng1 + Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat1), Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
+      pts.push([lng2 * 180/Math.PI, lat2 * 180/Math.PI]);
+    }
+    return pts;
+  }
+  function redrawLayers() {
+    if (!map || !map.getSource('acc')) return;
+    const accFeats = [], trailFeats = [];
+    for (const d of drivers.values()) {
+      if (!d.last) continue;
+      if (d.online && d.last.acc) accFeats.push({ type: 'Feature', properties: {},
+        geometry: { type: 'Polygon', coordinates: [accCircle(d.last.lng, d.last.lat, d.last.acc)] } });
+      if (d.trail && d.trail.length > 1 && (!selected || selected === d.id))
+        trailFeats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: d.trail } });
+    }
+    map.getSource('acc').setData({ type: 'FeatureCollection', features: accFeats });
+    map.getSource('trails').setData({ type: 'FeatureCollection', features: trailFeats });
+  }
+
+  // ---------- علامات السائقين ----------
+  function upsertMarker(d) {
+    if (!d.last || !map) return;
+    if (!d.marker) {
+      const el = document.createElement('div');
+      el.innerHTML = '<div class="marker"></div><div class="mlabel"></div>';
+      el.style.position = 'relative';
+      el.addEventListener('click', e => { e.stopPropagation(); select(d.id, true); });
+      d.marker = new maplibregl.Marker({ element: el }).setLngLat([d.last.lng, d.last.lat]).addTo(map);
+      d.el = el;
+    }
+    d.marker.setLngLat([d.last.lng, d.last.lat]);
+    d.el.querySelector('.marker').style.background = d.sos ? 'var(--alert)' : d.online ? 'var(--online)' : 'var(--offline)';
+    d.el.querySelector('.mlabel').textContent = d.name + (d.last.acc ? ' ±' + d.last.acc + 'م' : '');
+    if (follow && selected === d.id) map.easeTo({ center: [d.last.lng, d.last.lat], duration: 800 });
+  }
+
+  // ---------- القائمة الجانبية ----------
+  const age = ts => { const s = Math.round((Date.now() - ts)/1000);
+    return s < 5 ? 'الآن' : s < 60 ? 'قبل ' + s + 'ث' : 'قبل ' + Math.round(s/60) + ' د'; };
+  function renderList() {
+    const arr = [...drivers.values()].sort((a,b) => (b.online - a.online) || a.name.localeCompare(b.name, 'ar'));
+    $('cOn').textContent = arr.filter(d => d.online).length;
+    $('cOff').textContent = arr.filter(d => !d.online).length;
+    if (!arr.length) return;
+    $('dlist').innerHTML = arr.map(d => {
+      const acc = d.last?.acc, accCls = acc == null ? '' : acc <= 8 ? 'acc-good' : acc <= 25 ? 'acc-mid' : 'acc-bad';
+      return `<button class="drv ${selected===d.id?'sel':''}" data-id="${d.id}">
+        <span class="row1"><span class="dot" style="background:var(--${d.sos?'alert':d.online?'online':'offline'})"></span>
+          ${d.name}${d.sos ? ' <span style="color:var(--alert)">🚨</span>' : ''}</span>
+        <span class="meta">
+          <span>${d.device || ''}</span>
+          ${acc != null ? `<span class="num ${accCls}">± ${acc} م</span>` : ''}
+          ${d.last?.spd != null ? `<span class="num">${d.last.spd} كم/س</span>` : ''}
+          ${d.last?.bat != null ? `<span class="num">🔋${d.last.bat}٪</span>` : ''}
+          ${d.last ? `<span>${age(d.last.ts)}</span>` : '<span>لا إحداثيات بعد</span>'}
+        </span></button>`;
+    }).join('');
+  }
+  setInterval(renderList, 5000);   // تحديث «قبل كم ثانية»
+  $('dlist').addEventListener('click', e => {
+    const b = e.target.closest('.drv'); if (b) select(b.dataset.id, true);
+  });
+  function select(id, fly) {
+    selected = selected === id ? null : id; follow = !!selected;
+    const d = drivers.get(id);
+    if (fly && d?.last && selected && map) map.flyTo({ center: [d.last.lng, d.last.lat], zoom: 16.5 });
+    renderList(); redrawLayers();
+  }
+
+  // ---------- WebSocket ----------
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', role: 'ops', pin }));
+    ws.onmessage = e => {
+      const m = JSON.parse(e.data);
+      if (m.t === 'snapshot') { for (const d of m.drivers) { const old = drivers.get(d.id); drivers.set(d.id, { ...old, ...d }); } }
+      else if (m.t === 'driver') { const old = drivers.get(m.d.id); drivers.set(m.d.id, { ...old, ...m.d }); }
+      else if (m.t === 'gps') { const d = drivers.get(m.id); if (d) { d.last = m.last; d.online = true;
+        (d.trail = d.trail || []).push(m.point); if (d.trail.length > 400) d.trail.shift(); } }
+      else if (m.t === 'presence') { const d = drivers.get(m.id); if (d) { d.online = m.online; d.lastSeen = m.lastSeen; } }
+      else if (m.t === 'voice') {
+        feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);
+        if ($('autoPlay').checked) playVoice(m);
+      }
+      else if (m.t === 'text') feedAdd('💬 ' + m.from, m.text);
+      else if (m.t === 'announce') feedAdd('📢 ' + m.from, m.text);
+      else if (m.t === 'sos') {
+        const d = drivers.get(m.id); if (d) d.sos = true;
+        $('sosText').textContent = '🚨 طوارئ — ' + m.name + ' ضغط زر الطوارئ' +
+          (m.last ? ' · ' + m.last.lat.toFixed(5) + ',' + m.last.lng.toFixed(5) + ' ±' + m.last.acc + 'م' : '');
+        $('sosBanner').style.display = 'flex'; $('sosAck').dataset.id = m.id;
+        sosSound(); if (d?.last) map && map.flyTo({ center: [d.last.lng, d.last.lat], zoom: 16.5 });
+        feedAdd('🚨 طوارئ', m.name);
+      }
+      else if (m.t === 'sos_clear') { const d = drivers.get(m.id); if (d) d.sos = false;
+        $('sosBanner').style.display = 'none'; }
+      for (const d of drivers.values()) upsertMarker(d);
+      renderList(); redrawLayers();
+    };
+    ws.onclose = e => {
+      if (e.code === 4001) { sessionStorage.removeItem('pin'); askPin('رمز غير صحيح — أعد المحاولة'); return; }
+      setTimeout(connect, 3000);
+    };
+  }
+
+  // ---------- الدخول وإضافة جهاز ----------
+  function askPin(msg) {
+    if (msg) $('pinInput').placeholder = msg;
+    pinDlg.showModal();
+  }
+  $('pinGo').onclick = () => { pin = $('pinInput').value.trim(); if (!pin) return;
+    sessionStorage.pin = pin; pinDlg.close(); connect(); };
+  $('addBtn').onclick = () => {
+    const url = location.origin + '/driver.html';
+    $('drvLink').textContent = url;
+    const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
+    $('qrBox').innerHTML = qr.createSvgTag({ scalable: true, margin: 0 });
+    $('qrBox').firstChild.style.width = '190px'; $('qrBox').firstChild.style.height = '190px';
+    addDlg.showModal();
+  };
+
+  // ---------- البث الحي: عرض وتشغيل ----------
+  function feedAdd(who, text, audio) {
+    const f = $('feed');
+    if (f.firstElementChild?.classList.contains('empty')) f.innerHTML = '';
+    const div = document.createElement('div');
+    div.style.cssText = 'font-size:12.5px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:6px 9px';
+    div.innerHTML = `<b>${who}</b> <span style="color:var(--muted)">${new Date().toLocaleTimeString('ar',{hour:'2-digit',minute:'2-digit'})}</span><br>${text}` +
+      (audio ? ' <button style="padding:1px 8px;font-size:12px">▶</button>' : '');
+    if (audio) div.querySelector('button').onclick = () => playVoice(audio);
+    f.prepend(div);
+    while (f.children.length > 15) f.lastChild.remove();
+  }
+  function playVoice(m) { try { new Audio('data:' + m.mime + ';base64,' + m.data).play(); } catch {} }
+  function sosSound() { try {
+    const ctx = sosSound.ctx || (sosSound.ctx = new AudioContext());
+    for (let i = 0; i < 3; i++) { const o = ctx.createOscillator(), g = ctx.createGain();
+      o.frequency.value = 1100; o.connect(g); g.connect(ctx.destination);
+      g.gain.setValueAtTime(.3, ctx.currentTime + i * .35);
+      o.start(ctx.currentTime + i * .35); o.stop(ctx.currentTime + i * .35 + .22); }
+  } catch {} }
+  $('sosAck').onclick = () => ws && ws.send(JSON.stringify({ t: 'sos_clear', id: $('sosAck').dataset.id }));
+
+  // ---------- تحدث لكل الأجهزة (اضغط مطولًا) ----------
+  let opsRec = null, opsChunks = [], opsStream = null, opsStart = 0;
+  const talkBtn = $('talkBtn');
+  talkBtn.addEventListener('pointerdown', async () => {
+    if (!opsStream) { try { opsStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
+      catch { talkBtn.textContent = '🎙 المايك مرفوض'; return; } }
+    if (opsRec) return;
+    opsChunks = []; opsStart = Date.now();
+    try { opsRec = new MediaRecorder(opsStream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 24000 }); }
+    catch { opsRec = new MediaRecorder(opsStream); }
+    opsRec.ondataavailable = e => e.data.size && opsChunks.push(e.data);
+    opsRec.onstop = async () => {
+      const dur = Date.now() - opsStart;
+      const blob = new Blob(opsChunks, { type: opsRec.mimeType || 'audio/webm' });
+      opsRec = null;
+      if (dur < 300 || !blob.size) return;
+      const b64 = await new Promise(r => { const fr = new FileReader();
+        fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(blob); });
+      ws && ws.send(JSON.stringify({ t: 'voice', mime: blob.type, data: b64, dur }));
+      feedAdd('🎙 أنت (العمليات)', 'أُرسل بث (' + (dur/1000).toFixed(1) + ' ث)');
+    };
+    opsRec.start();
+    talkBtn.textContent = '🔴 يبث…'; talkBtn.style.borderColor = 'var(--alert)';
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev => talkBtn.addEventListener(ev, () => {
+    if (opsRec && opsRec.state !== 'inactive') opsRec.stop();
+    talkBtn.textContent = '🎙 تحدث'; talkBtn.style.borderColor = 'var(--line)';
+  }));
+
+  // ---------- رابط لوحة العقل ----------
+  fetch('/api/config').then(r => r.json())
+    .then(c => { $('brainLink').href = c.brainPanelUrl; })
+    .catch(() => { $('brainLink').style.display = 'none'; });
+
+  pin ? connect() : askPin();
+</script>
+</body>
+</html>

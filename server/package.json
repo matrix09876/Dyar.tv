@@ -1,0 +1,14 @@
+{
+  "name": "dyar-connect-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Dyar Connect — realtime gateway: live GPS tracking, presence, device enrollment",
+  "scripts": {
+    "start": "node src/server.js",
+    "sim": "node sim.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

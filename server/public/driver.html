@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>Dyar Driver</title>
+<style>
+  :root{ --bg:#12151d; --surface:#1a1f2b; --line:#2b3245; --text:#e9ebf1; --muted:#98a1b4;
+         --accent:#e2432e; --online:#3fbf77; --busy:#e2a43c; --alert:#e25555 }
+  *{box-sizing:border-box; margin:0; -webkit-tap-highlight-color:transparent}
+  body{background:var(--bg); color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif;
+       min-height:100vh; display:flex; flex-direction:column; padding:12px; gap:10px; user-select:none}
+  h1{font-size:18px} h1 b{color:var(--accent)}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px}
+  label{display:block; font-size:13px; color:var(--muted); margin:10px 0 4px}
+  input{width:100%; padding:12px; border-radius:10px; border:1px solid var(--line);
+        background:var(--bg); color:var(--text); font-size:16px; user-select:text}
+  button{font:inherit; color:inherit; background:none; border:none; cursor:pointer}
+  .big{width:100%; padding:14px; border-radius:12px; background:var(--accent);
+       color:#fff; font-size:17px; font-weight:700; margin-top:14px}
+  .num{font-variant-numeric:tabular-nums}
+  #err{color:var(--alert); font-size:13px; margin-top:8px; min-height:1em}
+  .hint{color:var(--muted); font-size:12px; line-height:1.6}
+
+  /* ===== شاشة الجهاز (مثل UR5/Zello) ===== */
+  .chanbar{display:flex; align-items:center; justify-content:space-between; gap:8px}
+  .chanbar .ch{font-weight:700; font-size:16px}
+  .chanbar .cnt{color:var(--online); font-size:13px}
+  .pill{padding:3px 12px; border-radius:999px; font-size:12.5px; font-weight:600}
+  .pill.on{background:#173225; color:var(--online)} .pill.off{background:#361b1e; color:var(--alert)}
+
+  .pttwrap{display:grid; place-items:center; padding:16px 0 6px}
+  #ptt{width:min(62vw,230px); height:min(62vw,230px); border-radius:50%;
+       border:5px solid var(--busy); background:var(--surface); display:grid; place-items:center;
+       transition:transform .08s, border-color .15s, background .15s; touch-action:none}
+  #ptt svg{width:34%; height:34%; stroke:var(--text)}
+  #ptt.rec{border-color:var(--alert); background:#2a1a1e; transform:scale(.96)}
+  #ptt.play{border-color:var(--online)}
+  #pttState{text-align:center; color:var(--muted); font-size:13.5px; min-height:1.3em; margin-top:6px}
+
+  .toolrow{display:flex; gap:10px; margin-top:10px}
+  .tool{flex:1; padding:11px; border-radius:11px; border:1px solid var(--line); background:var(--surface);
+        font-size:14px; text-align:center; font-weight:600}
+  .tool:active{background:var(--line)}
+  #sosBtn{border-color:var(--alert); color:var(--alert)}
+  #sosBtn.arming{background:var(--alert); color:#fff}
+
+  .msgrow{display:flex; gap:8px; margin-top:10px}
+  .msgrow input{flex:1}
+  .msgrow button{background:var(--accent); color:#fff; border-radius:10px; padding:0 16px; font-weight:700}
+
+  #log{display:flex; flex-direction:column-reverse; gap:6px; max-height:26vh; overflow:auto; margin-top:10px}
+  .ev{font-size:13px; background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:7px 11px}
+  .ev .who{color:var(--muted); font-size:11.5px}
+  .ev.voice{border-color:var(--online)}
+  .ev.ann{border-color:var(--busy)}
+  .stats{display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-top:10px}
+</style>
+</head>
+<body>
+  <h1><b>DYAR</b> جهاز الموصل</h1>
+
+  <div class="card" id="loginCard">
+    <label>اسم الموصل</label>
+    <input id="name" placeholder="مثال: محمد" autocomplete="name">
+    <label>رمز الربط (PIN من لوحة التحكم)</label>
+    <input id="pin" inputmode="numeric" placeholder="****">
+    <button class="big" id="joinBtn">ابدأ العمل 🛰</button>
+    <div id="err"></div>
+    <p class="hint">تُطلب صلاحيتا الموقع والمايكروفون مرة واحدة. أبقِ الصفحة مفتوحة أثناء العمل.</p>
+  </div>
+
+  <div id="deviceUI" style="display:none">
+    <div class="card chanbar">
+      <div><div class="ch">العمليات العامة</div><div class="cnt num" id="chCnt">—</div></div>
+      <span class="pill off" id="stConn">غير متصل</span>
+    </div>
+
+    <div class="pttwrap">
+      <button id="ptt" aria-label="اضغط مطولًا للتحدث">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="1.8">
+          <rect x="9" y="2.5" width="6" height="12" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18.5v3"/>
+        </svg>
+      </button>
+    </div>
+    <div id="pttState">اضغط مطولًا للتحدث</div>
+
+    <div class="toolrow">
+      <button class="tool" id="replayBtn">🔁 إعادة آخر رسالة</button>
+      <button class="tool" id="sosBtn">🚨 طوارئ (اضغط 3 ثوانٍ)</button>
+    </div>
+
+    <div class="msgrow">
+      <input id="txt" placeholder="اكتب رسالة…">
+      <button id="txtSend">إرسال</button>
+    </div>
+
+    <div id="log"></div>
+
+    <div class="stats">
+      <span>📍 <span class="num" id="stAcc">—</span></span>
+      <span>🚗 <span class="num" id="stSpd">—</span></span>
+      <span>🔋 <span class="num" id="stBat">—</span></span>
+      <span>↥ <span class="num" id="stSent">0</span> نقطة</span>
+    </div>
+  </div>
+
+<script>
+  const $ = id => document.getElementById(id);
+  const deviceId = localStorage.deviceId || (localStorage.deviceId = 'dev-' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36));
+  $('name').value = localStorage.driverName || '';
+  $('pin').value = localStorage.pin || '';
+
+  let ws = null, watchId = null, sent = 0, battery = null, closing = false, lastSend = 0;
+  let rec = null, recChunks = [], recStart = 0, lastAudio = null, micStream = null;
+
+  // ---------- صوت تنبيه (بيب) ----------
+  const beep = (f = 880, ms = 120) => { try {
+    const ctx = beep.ctx || (beep.ctx = new (window.AudioContext || window.webkitAudioContext)());
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+    g.gain.setValueAtTime(.25, ctx.currentTime);
+    o.start(); o.stop(ctx.currentTime + ms / 1000);
+  } catch {} };
+
+  function logEv(cls, who, html) {
+    const d = document.createElement('div');
+    d.className = 'ev ' + cls;
+    d.innerHTML = `<div class="who">${who} · ${new Date().toLocaleTimeString('ar', {hour:'2-digit',minute:'2-digit'})}</div>${html}`;
+    $('log').prepend(d);
+    while ($('log').children.length > 30) $('log').lastChild.remove();
+  }
+
+  // ---------- اتصال ----------
+  function start() {
+    const name = $('name').value.trim(), pin = $('pin').value.trim();
+    if (!name || !pin) { $('err').textContent = 'أدخل الاسم ورمز الربط'; return; }
+    localStorage.driverName = name; localStorage.pin = pin;
+    $('err').textContent = '';
+    connect(name, pin);
+  }
+  function connect(name, pin) {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    ws = new WebSocket(proto + '://' + location.host + '/ws');
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', role: 'driver', name, pin, deviceId,
+      device: (navigator.userAgent.match(/\(([^)]+)\)/) || [,'متصفح'])[1].split(';').slice(0,2).join(' ') }));
+    ws.onmessage = onMsg;
+    ws.onclose = (e) => {
+      if (e.code === 4001) { $('err').textContent = 'رمز الربط غير صحيح'; return; }
+      $('stConn').textContent = 'انقطع — إعادة اتصال…'; $('stConn').className = 'pill off';
+      if (!closing) setTimeout(() => connect(name, pin), 3000);
+    };
+  }
+
+  function onMsg(e) {
+    const m = JSON.parse(e.data);
+    if (m.t === 'ok') {
+      $('loginCard').style.display = 'none'; $('deviceUI').style.display = 'block';
+      $('stConn').textContent = 'متصل ✓'; $('stConn').className = 'pill on';
+      $('chCnt').textContent = m.online + ' متصل';
+      startGps(); keepAwake(); watchBattery(); initMic();
+    }
+    else if (m.t === 'stats') $('chCnt').textContent = m.online + ' متصل';
+    else if (m.t === 'voice') {                       // بث وارد — تشغيل فوري
+      beep(660, 90);
+      lastAudio = { mime: m.mime, data: m.data };
+      playAudio(lastAudio, m.from);
+      logEv('voice', '🎙 ' + m.from, m.dur ? 'بث صوتي (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي');
+    }
+    else if (m.t === 'text') logEv('', '💬 ' + m.from, m.text);
+    else if (m.t === 'announce') {                    // إعلان من لوحة العقل / العمليات
+      beep(520, 200); logEv('ann', '📢 ' + m.from, m.text);
+      if (m.speak) try { const u = new SpeechSynthesisUtterance(m.text); u.lang = 'ar'; speechSynthesis.speak(u); } catch {}
+    }
+    else if (m.t === 'sos') { beep(1200, 400); logEv('ann', '🚨 طوارئ', m.name + ' ضغط زر الطوارئ'); }
+  }
+
+  function playAudio(a, from) {
+    try {
+      const el = new Audio('data:' + a.mime + ';base64,' + a.data);
+      $('ptt').classList.add('play'); $('pttState').textContent = '🔊 يتحدث الآن: ' + (from || '');
+      el.onended = () => { $('ptt').classList.remove('play'); $('pttState').textContent = 'اضغط مطولًا للتحدث'; };
+      el.play();
+    } catch {}
+  }
+
+  // ---------- المايك + زر PTT (اضغط مطولًا = سجل، اترك = أرسل) ----------
+  async function initMic() {
+    try { micStream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
+    catch { $('pttState').textContent = 'المايك مرفوض — فعّله من إعدادات المتصفح'; }
+  }
+  function recStartFn() {
+    if (!micStream || rec) return;
+    recChunks = []; recStart = Date.now();
+    try { rec = new MediaRecorder(micStream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 24000 }); }
+    catch { rec = new MediaRecorder(micStream); }
+    rec.ondataavailable = ev => ev.data.size && recChunks.push(ev.data);
+    rec.onstop = async () => {
+      const dur = Date.now() - recStart;
+      const blob = new Blob(recChunks, { type: rec.mimeType || 'audio/webm' });
+      rec = null;
+      if (dur < 300 || !blob.size) return;            // ضغطة عابرة — تجاهل
+      const b64 = await new Promise(r => { const fr = new FileReader();
+        fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(blob); });
+      ws && ws.readyState === 1 && ws.send(JSON.stringify({ t: 'voice', mime: blob.type, data: b64, dur }));
+      logEv('voice', '🎙 أنت', 'أُرسل بث (' + (dur/1000).toFixed(1) + ' ث)');
+    };
+    rec.start();
+    beep(880, 80);
+    $('ptt').classList.add('rec'); $('pttState').textContent = '🔴 يسجل — اترك الزر للإرسال';
+  }
+  function recStopFn() {
+    if (!rec) return;
+    $('ptt').classList.remove('rec'); $('pttState').textContent = 'اضغط مطولًا للتحدث';
+    rec.state !== 'inactive' && rec.stop();
+  }
+  const ptt = $('ptt');
+  ptt.addEventListener('pointerdown', e => { e.preventDefault(); recStartFn(); });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev => ptt.addEventListener(ev, recStopFn));
+
+  // ---------- إعادة آخر رسالة (مثل Replay في Zello) ----------
+  $('replayBtn').onclick = () => lastAudio ? playAudio(lastAudio, 'إعادة') : logEv('', 'ℹ', 'لا رسائل بعد');
+
+  // ---------- زر الطوارئ: ضغط مستمر 3 ثوانٍ ----------
+  let sosTimer = null;
+  const sosBtn = $('sosBtn');
+  sosBtn.addEventListener('pointerdown', () => {
+    sosBtn.classList.add('arming'); let left = 3;
+    sosBtn.textContent = '🚨 استمر بالضغط… ' + left;
+    sosTimer = setInterval(() => {
+      if (--left > 0) { sosBtn.textContent = '🚨 استمر بالضغط… ' + left; beep(700, 80); return; }
+      clearInterval(sosTimer); sosTimer = null;
+      ws && ws.send(JSON.stringify({ t: 'sos' }));
+      beep(1200, 500);
+      sosBtn.textContent = '🚨 أُرسل نداء الطوارئ ✓';
+      logEv('ann', '🚨 أنت', 'أُرسل نداء طوارئ — موقعك مفتوح لغرفة العمليات');
+      setTimeout(() => { sosBtn.classList.remove('arming'); sosBtn.textContent = '🚨 طوارئ (اضغط 3 ثوانٍ)'; }, 4000);
+    }, 1000);
+  });
+  ['pointerup','pointercancel','pointerleave'].forEach(ev => sosBtn.addEventListener(ev, () => {
+    if (sosTimer) { clearInterval(sosTimer); sosTimer = null;
+      sosBtn.classList.remove('arming'); sosBtn.textContent = '🚨 طوارئ (اضغط 3 ثوانٍ)'; }
+  }));
+
+  // ---------- رسائل نصية ----------
+  $('txtSend').onclick = () => { const v = $('txt').value.trim(); if (!v) return;
+    ws && ws.send(JSON.stringify({ t: 'text', text: v })); logEv('', '💬 أنت', v); $('txt').value = ''; };
+  $('txt').addEventListener('keydown', e => e.key === 'Enter' && $('txtSend').click());
+
+  // ---------- GPS بدقة عالية ----------
+  function startGps() {
+    if (watchId !== null) return;
+    watchId = navigator.geolocation.watchPosition(fix => {
+      const c = fix.coords;
+      $('stAcc').textContent = '±' + Math.round(c.accuracy) + 'م';
+      $('stSpd').textContent = c.speed != null ? Math.round(c.speed * 3.6) + ' كم/س' : '—';
+      const now = Date.now();
+      if (ws && ws.readyState === 1 && now - lastSend >= 2000) {
+        lastSend = now;
+        ws.send(JSON.stringify({ t: 'gps', lat: c.latitude, lng: c.longitude, acc: c.accuracy,
+          spd: c.speed, hdg: c.heading, bat: battery }));
+        $('stSent').textContent = ++sent;
+      }
+    }, err => {
+      logEv('ann', '⚠ GPS', err.code === 1 ? 'رُفضت صلاحية الموقع — فعّلها من إعدادات المتصفح'
+        : err.message + (location.protocol === 'http:' && location.hostname !== 'localhost' ? ' (يتطلب HTTPS)' : ''));
+    }, { enableHighAccuracy: true, maximumAge: 0, timeout: 15000 });
+  }
+  async function watchBattery() {
+    try { const b = await navigator.getBattery();
+      const upd = () => { battery = b.level * 100; $('stBat').textContent = Math.round(battery) + '٪'; };
+      b.addEventListener('levelchange', upd); upd();
+    } catch { $('stBat').textContent = '—'; }
+  }
+  async function keepAwake() {
+    try { await navigator.wakeLock.request('screen');
+      document.addEventListener('visibilitychange', () =>
+        document.visibilityState === 'visible' && navigator.wakeLock.request('screen'));
+    } catch {}
+  }
+
+  $('joinBtn').onclick = start;
+</script>
+</body>
+</html>

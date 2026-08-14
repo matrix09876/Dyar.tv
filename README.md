@@ -208,4 +208,7 @@ Priority 3 — طوارئ (زر SOS      → يقطع أي بث جارٍ فور�
 | [docs/dashboard-spec.md](docs/dashboard-spec.md) | **مواصفة لوحة التحكم شاشة بشاشة** — قلب هذه الدراسة |
 | [docs/architecture.md](docs/architecture.md) | البنية التقنية التفصيلية: البروتوكول، قاعدة البيانات، مسار الصوت |
 | [docs/ai-dispatcher.md](docs/ai-dispatcher.md) | **الموزّع الذكي**: Brain يدير الطلبات — يختار أقرب موصل ويكلمه عبر اللاسلكي |
+| [docs/quickstart.md](docs/quickstart.md) | **تشغيل النظام الفعلي** (server/): خريطة حية + PTT + طوارئ + إضافة أجهزة |
+| [docs/brain-integration.md](docs/brain-integration.md) | دمج لوحة العقل (غرفة التشغيل): REST + Webhook + إعلانات صوتية |
+| [server/](server/) | **الكود العامل**: Gateway لحظي، لوحة خريطة حقيقية، صفحة جهاز الموصل، محاكي |
 | [prototype/dashboard.html](prototype/dashboard.html) | نموذج تفاعلي للوحة التحكم (يُفتح في أي متصفح) — يشمل محاكاة الموزّع الذكي |
