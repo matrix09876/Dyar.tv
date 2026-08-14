@@ -85,6 +85,19 @@
     </div>
     <div id="pttState">اضغط مطولًا للتحدث</div>
 
+    <div class="card" id="orderCard" style="display:none; border-color:var(--busy); margin-top:6px">
+      <div style="display:flex; justify-content:space-between; align-items:center">
+        <b class="num" id="ordId"></b><span class="pill" id="ordSt" style="background:#332a12;color:var(--busy)">مُسنَد</span>
+      </div>
+      <div id="ordTitle" style="margin:6px 0"></div>
+      <div class="hint num" id="ordDist"></div>
+      <div style="display:flex; gap:8px; margin-top:9px">
+        <button class="tool" id="ordNav">🗺 الوجهة</button>
+        <button class="tool" id="ordPick" style="border-color:var(--busy)">📦 استلمت</button>
+        <button class="tool" id="ordDone" style="border-color:var(--online); display:none">✅ سلّمت</button>
+      </div>
+    </div>
+
     <div class="toolrow">
       <button class="tool" id="replayBtn">🔁 إعادة آخر رسالة</button>
       <button class="tool" id="sosBtn">🚨 طوارئ (اضغط 3 ثوانٍ)</button>
@@ -152,14 +165,50 @@
     };
   }
 
+  // ---------- الطلب الجاري (مسار مُدار من غرفة العمليات) ----------
+  let myOrder = null, lastFix = null;
+  const havKm = (a, b) => { const R=6371, dLa=(b.lat-a.lat)*Math.PI/180, dLo=(b.lng-a.lng)*Math.PI/180;
+    const x = Math.sin(dLa/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x)); };
+  function renderOrder() {
+    const c = $('orderCard');
+    if (!myOrder) { c.style.display = 'none'; return; }
+    c.style.display = 'block';
+    $('ordId').textContent = myOrder.id;
+    $('ordTitle').textContent = myOrder.title;
+    const picked = myOrder.status === 'picked';
+    $('ordSt').textContent = picked ? 'استُلم — بطريقك للزبون' : 'مُسنَد — توجه للاستلام';
+    $('ordPick').style.display = picked ? 'none' : 'block';
+    $('ordDone').style.display = picked ? 'block' : 'none';
+    $('ordDist').textContent = lastFix
+      ? 'المسافة للوجهة: ' + havKm(lastFix, myOrder.dest).toFixed(1) + ' كم (خط مستقيم)' : '';
+  }
+  function setOrderMsg(o, announceNew) {
+    const isNew = o && (!myOrder || myOrder.id !== o.id);
+    myOrder = o; renderOrder();
+    if (isNew && announceNew) {
+      beep(520, 250);
+      logEv('ann', '🛵 طلب جديد', o.id + ' — ' + o.title);
+      try { const u = new SpeechSynthesisUtterance('طلب جديد: ' + o.title); u.lang = 'ar'; speechSynthesis.speak(u); } catch {}
+    }
+  }
+  $('ordPick').onclick = () => { ws && ws.send(JSON.stringify({ t: 'order_status', status: 'picked' }));
+    logEv('', '📦 أنت', 'استلمت الطلب ' + (myOrder?.id || '')); };
+  $('ordDone').onclick = () => { ws && ws.send(JSON.stringify({ t: 'order_status', status: 'delivered' }));
+    logEv('', '✅ أنت', 'سلّمت الطلب ' + (myOrder?.id || '')); };
+  $('ordNav').onclick = () => { if (myOrder)
+    window.open('https://www.google.com/maps/dir/?api=1&destination=' + myOrder.dest.lat + ',' + myOrder.dest.lng, '_blank'); };
+
   function onMsg(e) {
     const m = JSON.parse(e.data);
     if (m.t === 'ok') {
       $('loginCard').style.display = 'none'; $('deviceUI').style.display = 'block';
       $('stConn').textContent = 'متصل ✓'; $('stConn').className = 'pill on';
       $('chCnt').textContent = m.online + ' متصل';
+      setOrderMsg(m.order || null, false);
       startGps(); keepAwake(); watchBattery(); initMic();
     }
+    else if (m.t === 'order') setOrderMsg(m.order || null, true);
     else if (m.t === 'stats') $('chCnt').textContent = m.online + ' متصل';
     else if (m.t === 'voice') {                       // بث وارد — تشغيل فوري
       beep(660, 90);
@@ -252,6 +301,8 @@
     if (watchId !== null) return;
     watchId = navigator.geolocation.watchPosition(fix => {
       const c = fix.coords;
+      lastFix = { lat: c.latitude, lng: c.longitude };
+      if (myOrder) renderOrder();
       $('stAcc').textContent = '±' + Math.round(c.accuracy) + 'م';
       $('stSpd').textContent = c.speed != null ? Math.round(c.speed * 3.6) + ' كم/س' : '—';
       const now = Date.now();

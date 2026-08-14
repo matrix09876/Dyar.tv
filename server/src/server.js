@@ -30,6 +30,16 @@ const opsClients = new Set();
 const driverClients = new Map();          // ws -> driverId
 const voiceArchive = [];                  // آخر 50 بثًا {from, role, ts, mime, data, dur}
 
+// ---------- الطلبات: مسار مُدار (جديد ← مُسنَد ← استُلم ← سُلِّم) ----------
+/** id -> {id, title, dest:{lat,lng}, driverId, driverName, status, createdAt, updatedAt} */
+const orders = new Map();
+let orderSeq = 18300;                     // أرقام قريبة من الواقع للعرض
+const ORDER_STATUSES = new Set(['new', 'assigned', 'picked', 'delivered', 'cancelled']);
+const ordersList = () => [...orders.values()].sort((a, b) => b.createdAt - a.createdAt).slice(0, 100);
+const activeOrders = () => ordersList().filter(o => !['delivered', 'cancelled'].includes(o.status));
+const driverWs = (id) => { for (const [ws, did] of driverClients) if (did === id) return ws; };
+const driverActiveOrder = (id) => activeOrders().find(o => o.driverId === id) || null;
+
 const publicInfo = (d) => ({
   id: d.id, name: d.name, device: d.device, online: d.online, sos: !!d.sos,
   lastSeen: d.lastSeen, last: d.last, trail: d.trail,
@@ -40,6 +50,14 @@ const broadcastDrivers = (msg, except) => { for (const ws of driverClients.keys(
 const broadcastAll = (msg, except) => { broadcastOps(msg); broadcastDrivers(msg, except); };
 const onlineCount = () => [...drivers.values()].filter(d => d.online).length;
 const pushStats = () => broadcastDrivers({ t: 'stats', online: onlineCount(), channel: 'العمليات العامة' });
+const pushOrders = () => broadcastOps({ t: 'orders', orders: ordersList() });
+const pushDriverOrder = (driverId) => { const ws = driverWs(driverId); if (ws) send(ws, { t: 'order', order: driverActiveOrder(driverId) }); };
+
+function setOrder(o, patch) {
+  Object.assign(o, patch, { updatedAt: Date.now() });
+  pushOrders();
+  brainEvent('order_' + o.status, { order: { ...o } });
+}
 
 // ---------- جسر لوحة العقل: دفع الأحداث (fire-and-forget) ----------
 function brainEvent(event, payload) {
@@ -75,6 +93,10 @@ async function handleHttp(req, res) {
     // مواقع وحالة كل الموصلين — تستهلكها صفحات الطلبات/المكالمات في غرفة التشغيل
     if (url.pathname === '/api/v1/drivers' && req.method === 'GET')
       return json(200, { drivers: [...drivers.values()].map(d => ({ ...publicInfo(d), trail: undefined })) });
+
+    // الطلبات ومساراتها — لصفحة الطلبات في غرفة التشغيل
+    if (url.pathname === '/api/v1/orders' && req.method === 'GET')
+      return json(200, { orders: ordersList() });
 
     // إعلان من العقل إلى الأجهزة: {text, speak:true} — يظهر ويُنطق على جهاز الموصل
     if (url.pathname === '/api/v1/announce' && req.method === 'POST') {
@@ -130,7 +152,7 @@ wss.on('connection', (ws) => {
     // ===== لوحة التحكم =====
     if (hello.role === 'ops') {
       opsClients.add(ws);
-      send(ws, { t: 'snapshot', drivers: [...drivers.values()].map(publicInfo) });
+      send(ws, { t: 'snapshot', drivers: [...drivers.values()].map(publicInfo), orders: ordersList() });
       ws.on('message', (raw2) => {
         let m; try { m = JSON.parse(raw2); } catch { return; }
         if (handleShared(m, hello.name || 'العمليات', 'ops', ws)) return;
@@ -138,6 +160,36 @@ wss.on('connection', (ws) => {
           const d = drivers.get(m.id); d.sos = false;
           broadcastAll({ t: 'sos_clear', id: m.id });
           brainEvent('sos_cleared', { driver: publicInfo(d) });
+          return;
+        }
+        if (m.t === 'announce' && m.text) {                      // إعلان من اللوحة لكل الأجهزة
+          broadcastAll({ t: 'announce', text: String(m.text).slice(0, 300), speak: m.speak !== false, from: 'العمليات' }, ws);
+          return;
+        }
+        // ----- إدارة الطلبات -----
+        if (m.t === 'order_create' && m.title && Number.isFinite(m.dest?.lat) && Number.isFinite(m.dest?.lng)) {
+          const o = { id: 'ORD-' + (++orderSeq), title: String(m.title).slice(0, 80),
+            dest: { lat: +m.dest.lat, lng: +m.dest.lng }, driverId: null, driverName: null,
+            status: 'new', createdAt: Date.now(), updatedAt: Date.now() };
+          orders.set(o.id, o);
+          setOrder(o, {});
+          console.log(`[o] طلب جديد ${o.id}: ${o.title}`);
+          return;
+        }
+        const o = m.orderId && orders.get(m.orderId);
+        if (m.t === 'order_assign' && o && drivers.has(m.driverId)) {
+          const prev = o.driverId;
+          const d = drivers.get(m.driverId);
+          setOrder(o, { driverId: d.id, driverName: d.name, status: 'assigned' });
+          pushDriverOrder(d.id);
+          if (prev && prev !== d.id) pushDriverOrder(prev);      // أبلغ الموصل السابق أن الطلب سُحب
+          console.log(`[o] ${o.id} أُسند إلى ${d.name}`);
+          return;
+        }
+        if (m.t === 'order_status' && o && ORDER_STATUSES.has(m.status)) {
+          setOrder(o, { status: m.status });
+          if (o.driverId) pushDriverOrder(o.driverId);
+          return;
         }
       });
       ws.on('close', () => opsClients.delete(ws));
@@ -155,7 +207,7 @@ wss.on('connection', (ws) => {
       });
       drivers.set(id, d);
       driverClients.set(ws, id);
-      send(ws, { t: 'ok', id, channel: 'العمليات العامة', online: onlineCount() });
+      send(ws, { t: 'ok', id, channel: 'العمليات العامة', online: onlineCount(), order: driverActiveOrder(id) });
       broadcastOps({ t: 'driver', d: publicInfo(d) });
       brainEvent('driver_online', { driver: publicInfo(d) });
       pushStats();
@@ -188,6 +240,12 @@ wss.on('connection', (ws) => {
           broadcastAll({ t: 'sos', id, name: d.name, last: d.last });
           brainEvent('sos', { driver: publicInfo(d) });
           console.log(`[!] طوارئ من ${d.name}`);
+        }
+
+        // الموصل يحدّث حالة طلبه الجاري: استلمت / سلّمت
+        if (m.t === 'order_status' && ['picked', 'delivered'].includes(m.status)) {
+          const o = driverActiveOrder(id);
+          if (o) { setOrder(o, { status: m.status }); pushDriverOrder(id); }
         }
       });
 

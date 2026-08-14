@@ -3,274 +3,485 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dyar Connect — الخريطة الحية</title>
+<title>Dyar Connect — غرفة العمليات</title>
 <link rel="stylesheet" href="/vendor/maplibre-gl.css">
 <script src="/vendor/maplibre-gl.js"></script>
 <script src="/vendor/qrcode.js"></script>
 <style>
   :root{ --bg:#12151d; --surface:#1a1f2b; --surface2:#212736; --line:#2b3245; --text:#e9ebf1;
-         --muted:#98a1b4; --accent:#e2432e; --online:#3fbf77; --busy:#e2a43c; --alert:#e25555; --offline:#5b6375 }
+         --muted:#98a1b4; --faint:#6b7488; --accent:#e2432e; --accent-soft:#3a2320;
+         --online:#3fbf77; --busy:#e2a43c; --alert:#e25555; --offline:#5b6375; --route:#3b82f6 }
   *{box-sizing:border-box; margin:0}
   body{background:var(--bg); color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif; height:100vh;
-       display:grid; grid-template-rows:52px 1fr; overflow:hidden}
+       display:grid; grid-template-rows:52px 1fr; overflow:hidden; font-size:13.5px}
   .num{font-variant-numeric:tabular-nums}
-  header{display:flex; align-items:center; gap:14px; padding:0 16px; background:var(--surface); border-bottom:1px solid var(--line)}
-  header b{color:var(--accent); font-size:18px}
-  header .sub{color:var(--muted); font-size:13px}
-  .chip{display:inline-flex; align-items:center; gap:6px; padding:3px 11px; border-radius:999px;
-        font-size:12.5px; border:1px solid var(--line)}
-  .chip .dot{width:8px; height:8px; border-radius:50%}
-  #chips{display:flex; gap:8px; margin-inline-start:auto}
   button{font:inherit; color:inherit; background:var(--surface2); border:1px solid var(--line);
          border-radius:9px; padding:6px 12px; cursor:pointer}
   button:hover{border-color:var(--muted)}
-  .wrap{display:grid; grid-template-columns:300px 1fr; min-height:0}
-  aside{background:var(--surface); border-inline-end:1px solid var(--line); overflow:auto; padding:12px}
-  aside h3{font-size:12.5px; color:var(--muted); margin:4px 4px 10px}
-  .drv{width:100%; text-align:start; display:flex; flex-direction:column; gap:3px; padding:10px;
-       border-radius:10px; background:none; border:1px solid transparent; margin-bottom:4px}
+  button:focus-visible, a:focus-visible{outline:2px solid var(--accent); outline-offset:1px}
+  button.primary{background:var(--accent); border-color:var(--accent); color:#fff; font-weight:600}
+
+  /* ===== الرأس ===== */
+  header{display:flex; align-items:center; gap:12px; padding:0 14px; background:var(--surface);
+         border-bottom:1px solid var(--line); z-index:30}
+  header .brand b{color:var(--accent); font-size:17px}
+  header .brand span{color:var(--muted); font-size:12px; margin-inline-start:6px}
+  .chip{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
+        font-size:12px; border:1px solid var(--line); white-space:nowrap}
+  .chip .dot{width:8px; height:8px; border-radius:50%}
+  #chips{display:flex; gap:6px; margin-inline-start:auto; align-items:center; flex-wrap:nowrap; overflow-x:auto}
+
+  /* ===== التخطيط ===== */
+  .wrap{display:grid; grid-template-columns:320px 1fr; min-height:0}
+  aside{background:var(--surface); border-inline-end:1px solid var(--line); display:flex; flex-direction:column; min-height:0}
+  .tabs{display:flex; border-bottom:1px solid var(--line)}
+  .tabs button{flex:1; border:none; border-radius:0; background:none; padding:10px 4px; color:var(--muted);
+               border-bottom:2px solid transparent; font-weight:600; font-size:13px}
+  .tabs button.active{color:var(--accent); border-bottom-color:var(--accent)}
+  .pane{flex:1; overflow:auto; padding:10px; display:none; flex-direction:column; gap:8px; min-height:0}
+  .pane.show{display:flex}
+  #map{min-height:0; position:relative}
+
+  /* ===== الموصلون ===== */
+  .drv{width:100%; text-align:start; display:flex; flex-direction:column; gap:3px; padding:9px 10px;
+       border-radius:10px; background:none; border:1px solid transparent}
   .drv:hover{background:var(--surface2)}
   .drv.sel{border-color:var(--accent); background:var(--surface2)}
   .drv .row1{display:flex; align-items:center; gap:8px; font-weight:600}
   .drv .dot{width:9px; height:9px; border-radius:50%; flex:none}
-  .drv .meta{font-size:12px; color:var(--muted); display:flex; gap:10px; flex-wrap:wrap}
+  .drv .meta{font-size:11.5px; color:var(--muted); display:flex; gap:9px; flex-wrap:wrap}
   .acc-good{color:var(--online)} .acc-mid{color:var(--busy)} .acc-bad{color:var(--alert)}
-  #map{min-height:0}
+  .badge{font-size:10.5px; padding:1px 7px; border-radius:6px; background:var(--surface2);
+         border:1px solid var(--line); color:var(--muted)}
+
+  /* ===== الطلبات ===== */
+  .order{border:1px solid var(--line); border-radius:11px; padding:10px; display:flex; flex-direction:column; gap:6px; background:var(--surface2)}
+  .order.sel{border-color:var(--route)}
+  .order .top{display:flex; justify-content:space-between; align-items:center; gap:6px}
+  .order .top b{font-size:13px}
+  .st{font-size:11px; padding:2px 9px; border-radius:999px; font-weight:700; white-space:nowrap}
+  .st.new{background:#2b3245; color:var(--muted)}
+  .st.assigned{background:#332a12; color:var(--busy)}
+  .st.picked{background:#14263b; color:var(--route)}
+  .st.delivered{background:#173225; color:var(--online)}
+  .st.cancelled{background:#361b1e; color:var(--alert)}
+  .order .meta{font-size:11.5px; color:var(--muted)}
+  .order .eta{font-size:12.5px; color:var(--text)}
+  .order .acts{display:flex; gap:6px; flex-wrap:wrap}
+  .order .acts button{padding:4px 10px; font-size:12px}
+  select{font:inherit; background:var(--bg); color:var(--text); border:1px solid var(--line);
+         border-radius:8px; padding:5px 8px; max-width:100%}
+
+  /* ===== البث ===== */
+  .feed-item{font-size:12.5px; background:var(--surface2); border:1px solid var(--line); border-radius:9px; padding:6px 9px}
+  .announce-row{display:flex; gap:6px}
+  .announce-row input{flex:1; padding:8px 10px; border-radius:9px; border:1px solid var(--line);
+                      background:var(--bg); color:var(--text); font-size:13px}
+
+  /* ===== الخريطة ===== */
   .marker{width:16px; height:16px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 1px 6px rgba(0,0,0,.5); cursor:pointer}
-  .mlabel{position:absolute; top:18px; right:50%; transform:translateX(50%); white-space:nowrap; font-size:11.5px;
+  .mlabel{position:absolute; top:18px; right:50%; transform:translateX(50%); white-space:nowrap; font-size:11px;
           font-weight:700; color:#111; background:rgba(255,255,255,.92); padding:1px 7px; border-radius:6px;
           box-shadow:0 1px 4px rgba(0,0,0,.35)}
+  .dest-marker{font-size:22px; filter:drop-shadow(0 1px 3px rgba(0,0,0,.6)); cursor:pointer}
+  .maptools{position:absolute; top:10px; inset-inline-start:10px; z-index:5; background:var(--surface);
+            border:1px solid var(--line); border-radius:10px; padding:8px 11px; font-size:12px; color:var(--muted);
+            display:flex; flex-direction:column; gap:5px}
+  .maptools label{display:flex; gap:6px; align-items:center; cursor:pointer}
+  #pickHint{position:absolute; top:10px; right:50%; transform:translateX(50%); z-index:6; display:none;
+            background:var(--route); color:#fff; padding:7px 16px; border-radius:999px; font-weight:700; font-size:13px}
+  .empty{color:var(--muted); font-size:12.5px; padding:10px; line-height:1.7}
+
+  /* ===== حوارات وشريط طوارئ ===== */
   dialog{background:var(--surface); color:var(--text); border:1px solid var(--line); border-radius:14px;
-         padding:22px; max-width:360px; text-align:center}
+         padding:20px; max-width:380px; width:92vw}
   dialog::backdrop{background:rgba(0,0,0,.6)}
-  dialog input{width:100%; padding:11px; margin:14px 0; border-radius:9px; border:1px solid var(--line);
-               background:var(--bg); color:var(--text); font-size:15px; text-align:center}
-  dialog .qr{background:#fff; padding:12px; border-radius:10px; display:inline-block; margin:12px 0}
-  dialog .link{font-size:12px; color:var(--muted); word-break:break-all; direction:ltr}
-  .empty{color:var(--muted); font-size:13px; padding:14px; line-height:1.7}
+  dialog h3{margin-bottom:10px; font-size:15px}
+  dialog input{width:100%; padding:11px; margin:8px 0; border-radius:9px; border:1px solid var(--line);
+               background:var(--bg); color:var(--text); font-size:15px}
+  dialog .qr{background:#fff; padding:12px; border-radius:10px; display:block; width:fit-content; margin:12px auto}
+  dialog .link{font-size:11.5px; color:var(--muted); word-break:break-all; direction:ltr; text-align:center}
+  #sosBanner{display:none; position:absolute; top:52px; right:0; left:0; z-index:40; background:var(--alert);
+             color:#fff; padding:9px 16px; font-weight:700; align-items:center; gap:12px}
+  #sosBanner button{background:rgba(255,255,255,.18); border-color:rgba(255,255,255,.5); color:#fff}
 </style>
 </head>
 <body>
 <header>
-  <b>DYAR</b><span class="sub">Connect · الخريطة الحية — دقة بالمتر</span>
+  <div class="brand"><b>DYAR</b><span>Connect · غرفة العمليات</span></div>
   <div id="chips">
     <span class="chip"><span class="dot" style="background:var(--online)"></span><span class="num" id="cOn">0</span> متصل</span>
+    <span class="chip"><span class="dot" style="background:var(--busy)"></span><span class="num" id="cBusy">0</span> في توصيلة</span>
+    <span class="chip"><span class="dot" style="background:var(--route)"></span><span class="num" id="cOrd">0</span> طلب نشط</span>
     <span class="chip"><span class="dot" style="background:var(--offline)"></span><span class="num" id="cOff">0</span> غير متصل</span>
     <button id="talkBtn" title="اضغط مطولًا للتحدث لكل الأجهزة">🎙 تحدث</button>
-    <button id="addBtn">➕ إضافة جهاز</button>
+    <button id="addBtn">➕ جهاز</button>
     <a id="brainLink" target="_blank" rel="noopener"
-       style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 12px;text-decoration:none;color:var(--text)">🧠 لوحة العقل ↗</a>
+       style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">🧠 العقل</a>
   </div>
 </header>
 
-<div id="sosBanner" style="display:none; position:absolute; top:52px; right:0; left:0; z-index:40;
-     background:var(--alert); color:#fff; padding:10px 18px; font-weight:700; align-items:center; gap:14px">
+<div id="sosBanner" role="alert">
   <span id="sosText">🚨 طوارئ</span>
-  <button id="sosAck" style="background:rgba(255,255,255,.18); border-color:rgba(255,255,255,.5); color:#fff">تم التعامل</button>
+  <button id="sosAck">تم التعامل</button>
 </div>
 
 <div class="wrap">
   <aside>
-    <h3>البث الحي <label style="float:left;font-weight:400"><input type="checkbox" id="autoPlay" checked> تشغيل تلقائي</label></h3>
-    <div id="feed" style="display:flex;flex-direction:column;gap:5px;margin-bottom:14px;max-height:170px;overflow:auto">
-      <div class="empty" style="padding:6px">لا بثوث بعد — البثوث الصوتية والرسائل تظهر هنا وتُشغَّل فورًا.</div>
+    <div class="tabs">
+      <button class="active" data-p="drivers">الموصلون</button>
+      <button data-p="orders">الطلبات</button>
+      <button data-p="feed">البث</button>
     </div>
-    <h3>الأجهزة والموصلون</h3>
-    <div id="dlist"><div class="empty">لا أجهزة بعد.<br>اضغط «إضافة جهاز» وامسح الرمز من هاتف الموصل أو جهاز UR5.</div></div>
+
+    <div class="pane show" id="p-drivers">
+      <div id="dlist"><div class="empty">لا أجهزة بعد — اضغط «➕ جهاز» وامسح الرمز من UR5 أو أي هاتف.</div></div>
+    </div>
+
+    <div class="pane" id="p-orders">
+      <button class="primary" id="newOrderBtn">＋ طلب جديد (انقر ثم حدد الوجهة على الخريطة)</button>
+      <div id="olist"><div class="empty">لا طلبات بعد.<br>أنشئ طلبًا وأسنده — يظهر مساره الفعلي على الخريطة مع الزمن والمسافة، ويصل للموصل على جهازه.</div></div>
+    </div>
+
+    <div class="pane" id="p-feed">
+      <div class="announce-row">
+        <input id="annText" placeholder="إعلان لكل الأجهزة (يُنطق صوتيًا)…">
+        <button id="annSend">📢</button>
+      </div>
+      <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="autoPlay" checked> تشغيل البثوث الواردة تلقائيًا</label>
+      <div id="feed" style="display:flex;flex-direction:column;gap:5px"></div>
+    </div>
   </aside>
-  <div id="map"></div>
+
+  <div id="map">
+    <div id="pickHint">انقر على الخريطة لتحديد وجهة الطلب — Esc للإلغاء</div>
+    <div class="maptools">
+      <label><input type="checkbox" id="tTrails" checked> مسارات الحركة</label>
+      <label><input type="checkbox" id="tAcc" checked> دوائر دقة GPS</label>
+      <label><input type="checkbox" id="tFollow" checked> تتبع المحدد</label>
+    </div>
+  </div>
 </div>
 
 <dialog id="pinDlg">
-  <h3>دخول لوحة التحكم</h3>
+  <h3>دخول غرفة العمليات</h3>
   <input id="pinInput" placeholder="رمز PIN" inputmode="numeric">
-  <button id="pinGo" style="background:var(--accent); border:none; color:#fff; width:100%; padding:11px">دخول</button>
+  <button class="primary" id="pinGo" style="width:100%; padding:11px">دخول</button>
 </dialog>
 
 <dialog id="addDlg">
   <h3>إضافة جهاز جديد</h3>
-  <p style="font-size:13px; color:var(--muted); margin-top:8px">
-    على جهاز الموصل (UR5 أو أي هاتف): امسح الرمز أو افتح الرابط،
-    أدخل اسم الموصل ورمز PIN — يظهر على الخريطة فورًا.</p>
+  <p style="font-size:12.5px; color:var(--muted)">على جهاز الموصل: امسح الرمز أو افتح الرابط،
+     أدخل الاسم ورمز PIN — يظهر على الخريطة فورًا.</p>
   <div class="qr" id="qrBox"></div>
   <div class="link" id="drvLink"></div>
-  <button onclick="addDlg.close()" style="margin-top:14px">إغلاق</button>
+  <button onclick="addDlg.close()" style="margin-top:12px; width:100%">إغلاق</button>
+</dialog>
+
+<dialog id="orderDlg">
+  <h3>طلب جديد</h3>
+  <input id="ordTitle" placeholder="وصف الطلب — مثال: مطعم الشام ← بيت الزبون، دير الأسد">
+  <p style="font-size:12px;color:var(--muted)" id="ordDest"></p>
+  <div style="display:flex; gap:8px; margin-top:8px">
+    <button class="primary" id="ordCreate" style="flex:1">إنشاء الطلب</button>
+    <button onclick="orderDlg.close()">إلغاء</button>
+  </div>
 </dialog>
 
 <script>
   const $ = id => document.getElementById(id);
-  const drivers = new Map();           // id -> بيانات + marker
-  let selected = null, follow = false, map, ws, pin = sessionStorage.pin || '';
+  const drivers = new Map(), ordersM = new Map();
+  const routeCache = new Map();            // orderId -> {geometry, km, min, from:[lng,lat], at}
+  let selected = null, selectedOrder = null, map, ws, pin = sessionStorage.pin || '';
+  let picking = false, pickedDest = null;
+  const destMarkers = new Map();           // orderId -> Marker
 
-  // ---------- الخريطة الحقيقية: MapLibre + OpenStreetMap ----------
+  // ================= الخريطة =================
   try{ map = new maplibregl.Map({
-    container: 'map',
-    center: [35.30, 32.92],            // منطقة الجليل: البعنة / دير الأسد / مجد الكروم / كرمئيل
-    zoom: 12,
-    attributionControl: true,
-    style: {
-      version: 8,
+    container: 'map', center: [35.30, 32.92], zoom: 12, attributionControl: true,
+    style: { version: 8,
       sources: { osm: { type: 'raster', tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
                         tileSize: 256, maxzoom: 19, attribution: '© OpenStreetMap contributors' } },
-      layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
-    },
+      layers: [{ id: 'osm', type: 'raster', source: 'osm' }] },
   });
   map.addControl(new maplibregl.NavigationControl(), 'top-left');
-  map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left'); // مسطرة بالمتر
-  } catch(e){ map = null; $('map').innerHTML = '<p style="padding:20px;color:var(--muted)">تعذر تحميل الخريطة — القائمة الجانبية تعمل. ' + e.message + '</p>'; }
+  map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left');
+  } catch(e){ map = null; $('map').innerHTML = '<p class="empty">تعذر تحميل الخريطة: ' + e.message + '</p>'; }
 
   map && map.on('load', () => {
-    // دوائر دقة GPS (بالمتر الحقيقي) + خطوط المسار
-    map.addSource('acc', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
-    map.addLayer({ id: 'acc-fill', type: 'fill', source: 'acc',
-      paint: { 'fill-color': '#3fbf77', 'fill-opacity': 0.14 } });
-    map.addLayer({ id: 'acc-line', type: 'line', source: 'acc',
-      paint: { 'line-color': '#3fbf77', 'line-opacity': 0.5, 'line-width': 1.5 } });
-    map.addSource('trails', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+    map.addSource('acc', { type: 'geojson', data: fc([]) });
+    map.addLayer({ id: 'acc-fill', type: 'fill', source: 'acc', paint: { 'fill-color': '#3fbf77', 'fill-opacity': 0.13 } });
+    map.addLayer({ id: 'acc-line', type: 'line', source: 'acc', paint: { 'line-color': '#3fbf77', 'line-opacity': 0.5, 'line-width': 1.5 } });
+    map.addSource('trails', { type: 'geojson', data: fc([]) });
     map.addLayer({ id: 'trails', type: 'line', source: 'trails',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#e2432e', 'line-width': 3, 'line-opacity': 0.75 } });
+      paint: { 'line-color': '#e2432e', 'line-width': 3, 'line-opacity': 0.7 } });
+    map.addSource('route', { type: 'geojson', data: fc([]) });
+    map.addLayer({ id: 'route-casing', type: 'line', source: 'route',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#1d3a63', 'line-width': 8, 'line-opacity': 0.9 } });
+    map.addLayer({ id: 'route', type: 'line', source: 'route',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#3b82f6', 'line-width': 4.5 } });
+    map.on('click', onMapClick);
   });
+  const fc = f => ({ type: 'FeatureCollection', features: f });
+  const line = coords => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: coords } });
 
-  // دائرة جغرافية حقيقية نصف قطرها = دقة الجهاز بالمتر
   function accCircle(lng, lat, meters) {
-    const pts = [], R = 6371000, d = meters / R, lat1 = lat * Math.PI/180, lng1 = lng * Math.PI/180;
+    const pts = [], R = 6371000, d = meters / R, la = lat * Math.PI/180, lo = lng * Math.PI/180;
     for (let i = 0; i <= 48; i++) {
       const b = i / 48 * 2 * Math.PI;
-      const lat2 = Math.asin(Math.sin(lat1)*Math.cos(d) + Math.cos(lat1)*Math.sin(d)*Math.cos(b));
-      const lng2 = lng1 + Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(lat1), Math.cos(d)-Math.sin(lat1)*Math.sin(lat2));
-      pts.push([lng2 * 180/Math.PI, lat2 * 180/Math.PI]);
+      const la2 = Math.asin(Math.sin(la)*Math.cos(d) + Math.cos(la)*Math.sin(d)*Math.cos(b));
+      const lo2 = lo + Math.atan2(Math.sin(b)*Math.sin(d)*Math.cos(la), Math.cos(d)-Math.sin(la)*Math.sin(la2));
+      pts.push([lo2 * 180/Math.PI, la2 * 180/Math.PI]);
     }
     return pts;
   }
+  const havKm = (a, b) => { const R=6371, dLa=(b.lat-a.lat)*Math.PI/180, dLo=(b.lng-a.lng)*Math.PI/180;
+    const x = Math.sin(dLa/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x)); };
+
   function redrawLayers() {
     if (!map || !map.getSource('acc')) return;
-    const accFeats = [], trailFeats = [];
+    const accF = [], trailF = [];
     for (const d of drivers.values()) {
       if (!d.last) continue;
-      if (d.online && d.last.acc) accFeats.push({ type: 'Feature', properties: {},
-        geometry: { type: 'Polygon', coordinates: [accCircle(d.last.lng, d.last.lat, d.last.acc)] } });
-      if (d.trail && d.trail.length > 1 && (!selected || selected === d.id))
-        trailFeats.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: d.trail } });
+      if ($('tAcc').checked && d.online && d.last.acc)
+        accF.push({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [accCircle(d.last.lng, d.last.lat, d.last.acc)] } });
+      if ($('tTrails').checked && d.trail?.length > 1 && (!selected || selected === d.id))
+        trailF.push(line(d.trail));
     }
-    map.getSource('acc').setData({ type: 'FeatureCollection', features: accFeats });
-    map.getSource('trails').setData({ type: 'FeatureCollection', features: trailFeats });
+    map.getSource('acc').setData(fc(accF));
+    map.getSource('trails').setData(fc(trailF));
+    const r = selectedOrder && routeCache.get(selectedOrder);
+    map.getSource('route').setData(fc(r?.geometry ? [ { type:'Feature', properties:{}, geometry: r.geometry } ] : []));
   }
 
-  // ---------- علامات السائقين ----------
+  // ================= المسار الفعلي على الطرق (OSRM فوق OSM — مجاني) =================
+  async function computeRoute(o, force) {
+    const d = o.driverId && drivers.get(o.driverId);
+    if (!d?.last) return null;
+    const cached = routeCache.get(o.id);
+    const moved = cached ? havKm({lat: cached.from[1], lng: cached.from[0]}, d.last) : 9;
+    if (cached && !force && moved < 0.12 && Date.now() - cached.at < 30000) return cached;
+    const from = [d.last.lng, d.last.lat], to = [o.dest.lng, o.dest.lat];
+    try {
+      const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${from.join(',')};${to.join(',')}?overview=full&geometries=geojson`,
+        { signal: AbortSignal.timeout(6000) });
+      const j = await r.json();
+      const rt = j.routes?.[0];
+      if (!rt) throw new Error('no route');
+      const out = { geometry: rt.geometry, km: rt.distance/1000, min: rt.duration/60, from, at: Date.now() };
+      routeCache.set(o.id, out); return out;
+    } catch {
+      // تعذر التوجيه — خط مستقيم وتقدير 30 كم/س حتى يعود
+      const km = havKm(d.last, o.dest);
+      const out = { geometry: { type:'LineString', coordinates: [from, to] }, km, min: km/30*60, from, at: Date.now(), approx: true };
+      routeCache.set(o.id, out); return out;
+    }
+  }
+  setInterval(async () => {                 // تحديث مسار الطلب المحدد مع حركة الموصل
+    const o = selectedOrder && ordersM.get(selectedOrder);
+    if (o && !['delivered','cancelled'].includes(o.status)) { await computeRoute(o); renderOrders(); redrawLayers(); }
+  }, 10000);
+
+  // ================= علامات الخريطة =================
   function upsertMarker(d) {
     if (!d.last || !map) return;
     if (!d.marker) {
       const el = document.createElement('div');
       el.innerHTML = '<div class="marker"></div><div class="mlabel"></div>';
       el.style.position = 'relative';
-      el.addEventListener('click', e => { e.stopPropagation(); select(d.id, true); });
+      el.addEventListener('click', e => { e.stopPropagation(); selectDriver(d.id, true); });
       d.marker = new maplibregl.Marker({ element: el }).setLngLat([d.last.lng, d.last.lat]).addTo(map);
       d.el = el;
     }
     d.marker.setLngLat([d.last.lng, d.last.lat]);
-    d.el.querySelector('.marker').style.background = d.sos ? 'var(--alert)' : d.online ? 'var(--online)' : 'var(--offline)';
-    d.el.querySelector('.mlabel').textContent = d.name + (d.last.acc ? ' ±' + d.last.acc + 'م' : '');
-    if (follow && selected === d.id) map.easeTo({ center: [d.last.lng, d.last.lat], duration: 800 });
+    const busy = activeOrderOf(d.id);
+    d.el.querySelector('.marker').style.background =
+      d.sos ? 'var(--alert)' : !d.online ? 'var(--offline)' : busy ? 'var(--busy)' : 'var(--online)';
+    d.el.querySelector('.mlabel').textContent = d.name + (busy ? ' · ' + busy.id : '') + (d.last.acc ? ' ±' + d.last.acc + 'م' : '');
+    if ($('tFollow').checked && selected === d.id) map.easeTo({ center: [d.last.lng, d.last.lat], duration: 800 });
   }
+  function upsertDestMarker(o) {
+    if (!map) return;
+    const done = ['delivered','cancelled'].includes(o.status);
+    let mk = destMarkers.get(o.id);
+    if (done) { mk?.remove(); destMarkers.delete(o.id); return; }
+    if (!mk) {
+      const el = document.createElement('div');
+      el.className = 'dest-marker'; el.textContent = '📍'; el.title = o.id + ' — ' + o.title;
+      el.addEventListener('click', e => { e.stopPropagation(); selectOrder(o.id); });
+      mk = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([o.dest.lng, o.dest.lat]).addTo(map);
+      destMarkers.set(o.id, mk);
+    }
+  }
+  const activeOrderOf = id => [...ordersM.values()].find(o => o.driverId === id && !['delivered','cancelled'].includes(o.status));
 
-  // ---------- القائمة الجانبية ----------
+  // ================= لوحة الموصلين =================
   const age = ts => { const s = Math.round((Date.now() - ts)/1000);
     return s < 5 ? 'الآن' : s < 60 ? 'قبل ' + s + 'ث' : 'قبل ' + Math.round(s/60) + ' د'; };
-  function renderList() {
+  function renderDrivers() {
     const arr = [...drivers.values()].sort((a,b) => (b.online - a.online) || a.name.localeCompare(b.name, 'ar'));
     $('cOn').textContent = arr.filter(d => d.online).length;
     $('cOff').textContent = arr.filter(d => !d.online).length;
+    $('cBusy').textContent = arr.filter(d => d.online && activeOrderOf(d.id)).length;
     if (!arr.length) return;
     $('dlist').innerHTML = arr.map(d => {
       const acc = d.last?.acc, accCls = acc == null ? '' : acc <= 8 ? 'acc-good' : acc <= 25 ? 'acc-mid' : 'acc-bad';
+      const o = activeOrderOf(d.id);
       return `<button class="drv ${selected===d.id?'sel':''}" data-id="${d.id}">
-        <span class="row1"><span class="dot" style="background:var(--${d.sos?'alert':d.online?'online':'offline'})"></span>
-          ${d.name}${d.sos ? ' <span style="color:var(--alert)">🚨</span>' : ''}</span>
+        <span class="row1"><span class="dot" style="background:var(--${d.sos?'alert':!d.online?'offline':o?'busy':'online'})"></span>
+          ${d.name}${d.sos ? ' 🚨' : ''}
+          ${o ? `<span class="badge num">${o.id}</span>` : ''}</span>
         <span class="meta">
           <span>${d.device || ''}</span>
           ${acc != null ? `<span class="num ${accCls}">± ${acc} م</span>` : ''}
           ${d.last?.spd != null ? `<span class="num">${d.last.spd} كم/س</span>` : ''}
           ${d.last?.bat != null ? `<span class="num">🔋${d.last.bat}٪</span>` : ''}
-          ${d.last ? `<span>${age(d.last.ts)}</span>` : '<span>لا إحداثيات بعد</span>'}
+          ${d.last ? `<span>${age(d.last.ts)}</span>` : '<span>لا إحداثيات</span>'}
         </span></button>`;
     }).join('');
   }
-  setInterval(renderList, 5000);   // تحديث «قبل كم ثانية»
-  $('dlist').addEventListener('click', e => {
-    const b = e.target.closest('.drv'); if (b) select(b.dataset.id, true);
-  });
-  function select(id, fly) {
-    selected = selected === id ? null : id; follow = !!selected;
+  $('dlist').addEventListener('click', e => { const b = e.target.closest('.drv'); if (b) selectDriver(b.dataset.id, true); });
+  function selectDriver(id, fly) {
+    selected = selected === id ? null : id;
     const d = drivers.get(id);
-    if (fly && d?.last && selected && map) map.flyTo({ center: [d.last.lng, d.last.lat], zoom: 16.5 });
-    renderList(); redrawLayers();
+    if (fly && d?.last && selected && map) map.flyTo({ center: [d.last.lng, d.last.lat], zoom: 16 });
+    renderDrivers(); redrawLayers();
   }
 
-  // ---------- WebSocket ----------
+  // ================= لوحة الطلبات =================
+  const stTxt = { new:'جديد', assigned:'مُسنَد', picked:'استُلم', delivered:'سُلِّم', cancelled:'ملغى' };
+  function renderOrders() {
+    const arr = [...ordersM.values()].sort((a,b) => b.createdAt - a.createdAt);
+    $('cOrd').textContent = arr.filter(o => !['delivered','cancelled'].includes(o.status)).length;
+    if (!arr.length) return;
+    $('olist').innerHTML = arr.map(o => {
+      const done = ['delivered','cancelled'].includes(o.status);
+      const r = routeCache.get(o.id);
+      const cands = [...drivers.values()].filter(d => d.online && d.last)
+        .map(d => ({ d, km: havKm(d.last, o.dest) })).sort((a,b) => a.km - b.km);
+      return `<div class="order ${selectedOrder===o.id?'sel':''}" data-id="${o.id}">
+        <div class="top"><b class="num">${o.id}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
+        <div>${o.title}</div>
+        <div class="meta">${o.driverName ? '🛵 ' + o.driverName : 'بلا موصل'} · ${age(o.createdAt)}</div>
+        ${!done && o.driverId && r ? `<div class="eta num">🛣 ${r.km.toFixed(1)} كم · ⏱ ${Math.ceil(r.min)} دقيقة${r.approx ? ' (تقديري)' : ''}</div>` : ''}
+        ${!done ? `<div class="acts">
+          ${o.status === 'new' || !o.driverId ? `
+            <select data-assign="${o.id}">
+              <option value="">أسنِد إلى…</option>
+              ${cands.map((c,i) => `<option value="${c.d.id}">${c.d.name} — ${c.km.toFixed(1)} كم${i===0?' ⭐ الأقرب':''}</option>`).join('')}
+            </select>` : `
+            <button data-track="${o.id}">🗺 المسار</button>
+            <select data-assign="${o.id}"><option value="">نقل إلى…</option>
+              ${cands.filter(c => c.d.id !== o.driverId).map(c => `<option value="${c.d.id}">${c.d.name} — ${c.km.toFixed(1)} كم</option>`).join('')}
+            </select>`}
+          <button data-cancel="${o.id}">إلغاء</button>
+        </div>` : ''}
+      </div>`;
+    }).join('');
+  }
+  $('olist').addEventListener('change', e => {
+    const sel = e.target.closest('select[data-assign]');
+    if (sel && sel.value) { ws.send(JSON.stringify({ t: 'order_assign', orderId: sel.dataset.assign, driverId: sel.value })); selectOrder(sel.dataset.assign, true); }
+  });
+  $('olist').addEventListener('click', e => {
+    const tr = e.target.closest('[data-track]'), cn = e.target.closest('[data-cancel]');
+    if (tr) selectOrder(tr.dataset.track, true);
+    else if (cn) ws.send(JSON.stringify({ t: 'order_status', orderId: cn.dataset.cancel, status: 'cancelled' }));
+    else { const card = e.target.closest('.order'); if (card && !e.target.closest('select')) selectOrder(card.dataset.id); }
+  });
+  async function selectOrder(id, fit) {
+    selectedOrder = selectedOrder === id && !fit ? null : id;
+    const o = ordersM.get(id);
+    if (o && selectedOrder) {
+      const r = await computeRoute(o, true);
+      if (fit && r && map) {
+        const xs = r.geometry.coordinates.map(c => c[0]), ys = r.geometry.coordinates.map(c => c[1]);
+        map.fitBounds([[Math.min(...xs), Math.min(...ys)], [Math.max(...xs), Math.max(...ys)]], { padding: 70, duration: 700 });
+      }
+    }
+    renderOrders(); redrawLayers();
+  }
+
+  // إنشاء طلب: زر ← نقرة خريطة ← حوار
+  $('newOrderBtn').onclick = () => { picking = true; $('pickHint').style.display = 'block'; };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { picking = false; $('pickHint').style.display = 'none'; } });
+  function onMapClick(e) {
+    if (!picking) return;
+    picking = false; $('pickHint').style.display = 'none';
+    pickedDest = { lat: e.lngLat.lat, lng: e.lngLat.lng };
+    $('ordDest').textContent = 'الوجهة: ' + pickedDest.lat.toFixed(5) + ' , ' + pickedDest.lng.toFixed(5);
+    $('ordTitle').value = '';
+    orderDlg.showModal();
+  }
+  $('ordCreate').onclick = () => {
+    const title = $('ordTitle').value.trim();
+    if (!title || !pickedDest) return;
+    ws.send(JSON.stringify({ t: 'order_create', title, dest: pickedDest }));
+    orderDlg.close();
+    document.querySelector('[data-p="orders"]').click();
+  };
+
+  // ================= التبويبات =================
+  document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
+    document.querySelectorAll('.pane').forEach(p => p.classList.toggle('show', p.id === 'p-' + b.dataset.p));
+  });
+  ['tTrails','tAcc'].forEach(id => $(id).addEventListener('change', redrawLayers));
+
+  // ================= WebSocket =================
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(proto + '://' + location.host + '/ws');
     ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', role: 'ops', pin }));
     ws.onmessage = e => {
       const m = JSON.parse(e.data);
-      if (m.t === 'snapshot') { for (const d of m.drivers) { const old = drivers.get(d.id); drivers.set(d.id, { ...old, ...d }); } }
+      if (m.t === 'snapshot') {
+        for (const d of m.drivers) { const old = drivers.get(d.id); drivers.set(d.id, { ...old, ...d }); }
+        (m.orders || []).forEach(o => ordersM.set(o.id, o));
+      }
       else if (m.t === 'driver') { const old = drivers.get(m.d.id); drivers.set(m.d.id, { ...old, ...m.d }); }
       else if (m.t === 'gps') { const d = drivers.get(m.id); if (d) { d.last = m.last; d.online = true;
         (d.trail = d.trail || []).push(m.point); if (d.trail.length > 400) d.trail.shift(); } }
       else if (m.t === 'presence') { const d = drivers.get(m.id); if (d) { d.online = m.online; d.lastSeen = m.lastSeen; } }
-      else if (m.t === 'voice') {
-        feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);
-        if ($('autoPlay').checked) playVoice(m);
-      }
+      else if (m.t === 'orders') { for (const o of m.orders) ordersM.set(o.id, o); for (const o of m.orders) upsertDestMarker(o); }
+      else if (m.t === 'voice') { feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);
+        if ($('autoPlay').checked) playVoice(m); }
       else if (m.t === 'text') feedAdd('💬 ' + m.from, m.text);
       else if (m.t === 'announce') feedAdd('📢 ' + m.from, m.text);
       else if (m.t === 'sos') {
         const d = drivers.get(m.id); if (d) d.sos = true;
-        $('sosText').textContent = '🚨 طوارئ — ' + m.name + ' ضغط زر الطوارئ' +
+        $('sosText').textContent = '🚨 طوارئ — ' + m.name +
           (m.last ? ' · ' + m.last.lat.toFixed(5) + ',' + m.last.lng.toFixed(5) + ' ±' + m.last.acc + 'م' : '');
         $('sosBanner').style.display = 'flex'; $('sosAck').dataset.id = m.id;
-        sosSound(); if (d?.last) map && map.flyTo({ center: [d.last.lng, d.last.lat], zoom: 16.5 });
+        sosSound(); if (d?.last && map) map.flyTo({ center: [d.last.lng, d.last.lat], zoom: 16.5 });
         feedAdd('🚨 طوارئ', m.name);
       }
-      else if (m.t === 'sos_clear') { const d = drivers.get(m.id); if (d) d.sos = false;
-        $('sosBanner').style.display = 'none'; }
+      else if (m.t === 'sos_clear') { const d = drivers.get(m.id); if (d) d.sos = false; $('sosBanner').style.display = 'none'; }
       for (const d of drivers.values()) upsertMarker(d);
-      renderList(); redrawLayers();
+      for (const o of ordersM.values()) upsertDestMarker(o);
+      renderDrivers(); renderOrders(); redrawLayers();
     };
     ws.onclose = e => {
       if (e.code === 4001) { sessionStorage.removeItem('pin'); askPin('رمز غير صحيح — أعد المحاولة'); return; }
       setTimeout(connect, 3000);
     };
   }
+  setInterval(() => { renderDrivers(); }, 5000);
 
-  // ---------- الدخول وإضافة جهاز ----------
-  function askPin(msg) {
-    if (msg) $('pinInput').placeholder = msg;
-    pinDlg.showModal();
-  }
-  $('pinGo').onclick = () => { pin = $('pinInput').value.trim(); if (!pin) return;
-    sessionStorage.pin = pin; pinDlg.close(); connect(); };
-  $('addBtn').onclick = () => {
-    const url = location.origin + '/driver.html';
-    $('drvLink').textContent = url;
-    const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
-    $('qrBox').innerHTML = qr.createSvgTag({ scalable: true, margin: 0 });
-    $('qrBox').firstChild.style.width = '190px'; $('qrBox').firstChild.style.height = '190px';
-    addDlg.showModal();
-  };
-
-  // ---------- البث الحي: عرض وتشغيل ----------
+  // ================= البث والإعلان =================
   function feedAdd(who, text, audio) {
     const f = $('feed');
-    if (f.firstElementChild?.classList.contains('empty')) f.innerHTML = '';
     const div = document.createElement('div');
-    div.style.cssText = 'font-size:12.5px;background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:6px 9px';
+    div.className = 'feed-item';
     div.innerHTML = `<b>${who}</b> <span style="color:var(--muted)">${new Date().toLocaleTimeString('ar',{hour:'2-digit',minute:'2-digit'})}</span><br>${text}` +
       (audio ? ' <button style="padding:1px 8px;font-size:12px">▶</button>' : '');
     if (audio) div.querySelector('button').onclick = () => playVoice(audio);
     f.prepend(div);
-    while (f.children.length > 15) f.lastChild.remove();
+    while (f.children.length > 25) f.lastChild.remove();
   }
   function playVoice(m) { try { new Audio('data:' + m.mime + ';base64,' + m.data).play(); } catch {} }
   function sosSound() { try {
@@ -281,8 +492,11 @@
       o.start(ctx.currentTime + i * .35); o.stop(ctx.currentTime + i * .35 + .22); }
   } catch {} }
   $('sosAck').onclick = () => ws && ws.send(JSON.stringify({ t: 'sos_clear', id: $('sosAck').dataset.id }));
+  $('annSend').onclick = () => { const v = $('annText').value.trim(); if (!v) return;
+    ws.send(JSON.stringify({ t: 'announce', text: v, speak: true })); feedAdd('📢 أنت', v); $('annText').value = ''; };
+  $('annText').addEventListener('keydown', e => e.key === 'Enter' && $('annSend').click());
 
-  // ---------- تحدث لكل الأجهزة (اضغط مطولًا) ----------
+  // ================= تحدث لكل الأجهزة =================
   let opsRec = null, opsChunks = [], opsStream = null, opsStart = 0;
   const talkBtn = $('talkBtn');
   talkBtn.addEventListener('pointerdown', async () => {
@@ -311,7 +525,18 @@
     talkBtn.textContent = '🎙 تحدث'; talkBtn.style.borderColor = 'var(--line)';
   }));
 
-  // ---------- رابط لوحة العقل ----------
+  // ================= الدخول + إضافة جهاز + لوحة العقل =================
+  function askPin(msg) { if (msg) $('pinInput').placeholder = msg; pinDlg.showModal(); }
+  $('pinGo').onclick = () => { pin = $('pinInput').value.trim(); if (!pin) return;
+    sessionStorage.pin = pin; pinDlg.close(); connect(); };
+  $('addBtn').onclick = () => {
+    const url = location.origin + '/driver.html';
+    $('drvLink').textContent = url;
+    const qr = qrcode(0, 'M'); qr.addData(url); qr.make();
+    $('qrBox').innerHTML = qr.createSvgTag({ scalable: true, margin: 0 });
+    $('qrBox').firstChild.style.width = '190px'; $('qrBox').firstChild.style.height = '190px';
+    addDlg.showModal();
+  };
   fetch('/api/config').then(r => r.json())
     .then(c => { $('brainLink').href = c.brainPanelUrl; })
     .catch(() => { $('brainLink').style.display = 'none'; });
