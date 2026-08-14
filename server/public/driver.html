@@ -230,10 +230,10 @@
       try { const u = new SpeechSynthesisUtterance('طلب جديد: ' + o.title); u.lang = 'ar'; speechSynthesis.speak(u); } catch {}
     }
   }
-  $('ordPick').onclick = () => { ws && ws.send(JSON.stringify({ t: 'order_status', status: 'picked' }));
-    logEv('', '📦 أنت', 'استلمت الطلب ' + (myOrder?.id || '')); };
-  $('ordDone').onclick = () => { ws && ws.send(JSON.stringify({ t: 'order_status', status: 'delivered' }));
-    logEv('', '✅ أنت', 'سلّمت الطلب ' + (myOrder?.id || '')); };
+  $('ordPick').onclick = () => { if (!myOrder) return; ws && ws.send(JSON.stringify({ t: 'order_status', status: 'picked', orderId: myOrder.id }));
+    logEv('', '📦 أنت', 'استلمت الطلب ' + myOrder.id); };
+  $('ordDone').onclick = () => { if (!myOrder) return; ws && ws.send(JSON.stringify({ t: 'order_status', status: 'delivered', orderId: myOrder.id }));
+    logEv('', '✅ أنت', 'سلّمت الطلب ' + myOrder.id); };
   $('ordNav').onclick = () => { if (myOrder)
     window.open('https://www.google.com/maps/dir/?api=1&destination=' + myOrder.dest.lat + ',' + myOrder.dest.lng, '_blank'); };
 

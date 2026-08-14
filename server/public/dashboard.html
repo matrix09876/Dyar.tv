@@ -476,6 +476,10 @@
         (d.trail = d.trail || []).push(m.point); if (d.trail.length > 400) d.trail.shift(); } }
       else if (m.t === 'presence') { const d = drivers.get(m.id); if (d) { d.online = m.online; d.lastSeen = m.lastSeen; } }
       else if (m.t === 'orders') { for (const o of m.orders) ordersM.set(o.id, o); for (const o of m.orders) upsertDestMarker(o); }
+      else if (m.t === 'order_upd') {                        // تحديث طلب مفرد (كفؤ عند الحِمل)
+        const o = m.order; ordersM.set(o.id, o); upsertDestMarker(o);
+        if (['delivered','cancelled'].includes(o.status)) setTimeout(() => { ordersM.delete(o.id); renderOrders(); }, 8000);
+      }
       else if (m.t === 'device_removed') { const d = drivers.get(m.id); d?.marker?.remove(); drivers.delete(m.id); if (selected === m.id) selected = null; }
       else if (m.t === 'voice') { feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);
         if ($('autoPlay').checked) playVoice(m); }
