@@ -22,3 +22,9 @@ services:
         value: https://egint-support.onrender.com
       - key: BRAIN_WEBHOOK_URL
         value: https://egint-support.onrender.com/webhooks/dyar-connect
+      - key: OPS_PIN
+        sync: false          # رمز غرفة العمليات وشاشة عقل ديار (منفصل عن رمز الأجهزة)
+      - key: ANTHROPIC_API_KEY
+        sync: false          # اختياري: الصقه ليصير الاستدلال بعقل كلاودي (Claude) — بدونه يعمل العقل المحلي
+      - key: KIOSK_STAFF
+        sync: false          # اختياري JSON: [{"name":"أمين","title":"المدير","role":"management"}, ...]

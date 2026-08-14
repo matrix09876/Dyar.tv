@@ -104,6 +104,17 @@
   #sosBanner{display:none; position:absolute; top:52px; right:0; left:0; z-index:40; background:var(--alert);
              color:#fff; padding:9px 16px; font-weight:700; align-items:center; gap:12px}
   #sosBanner button{background:rgba(255,255,255,.18); border-color:rgba(255,255,255,.5); color:#fff}
+  /* ===== الأولويات (Priority Engine) ===== */
+  .prio-item{background:var(--surface2,#161a24); border:1px solid var(--line); border-radius:10px; padding:8px 10px; margin-bottom:6px; font-size:13px}
+  .prio-item.esc{border-color:var(--alert)}
+  .prio-sev{font-weight:800; font-size:11.5px; padding:1px 7px; border-radius:7px; margin-inline-end:6px}
+  .prio-sev.P0,.prio-sev.P1{background:#3a1518; color:#ff9c9c} .prio-sev.P2{background:#37280f; color:#f0c069}
+  .prio-sev.P3{background:#2c2f1a; color:#d8d873} .prio-sev.P4{background:#16301f; color:#7fd8a5}
+  .prio-meta{color:var(--muted); font-size:11.5px; margin-top:3px}
+  .prio-act{display:flex; gap:6px; margin-top:6px}
+  .prio-act button{flex:1; padding:5px; font-size:12px; border:1px solid var(--line); border-radius:8px; background:none; color:var(--text); cursor:pointer}
+  .prio-act button.ok{border-color:var(--online); color:var(--online)}
+  #prioBadge{background:var(--alert); color:#fff; border-radius:99px; font-size:10.5px; padding:0 6px; margin-inline-start:4px; display:none}
 </style>
 </head>
 <body>
@@ -118,6 +129,8 @@
     <button id="addBtn">➕ جهاز</button>
     <a id="brainLink" target="_blank" rel="noopener"
        style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">🧠 العقل</a>
+    <a href="/kiosk.html" target="_blank" rel="noopener"
+       style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">📺 الشاشة</a>
   </div>
 </header>
 
@@ -131,6 +144,7 @@
     <div class="tabs">
       <button class="active" data-p="drivers">الموصلون</button>
       <button data-p="orders">الطلبات</button>
+      <button data-p="prio">⚡<span id="prioBadge">0</span></button>
       <button data-p="feed">البث</button>
     </div>
 
@@ -141,6 +155,11 @@
     <div class="pane" id="p-orders">
       <button class="primary" id="newOrderBtn">＋ طلب جديد (انقر ثم حدد الوجهة على الخريطة)</button>
       <div id="olist"><div class="empty">لا طلبات بعد.<br>أنشئ طلبًا وأسنده — يظهر مساره الفعلي على الخريطة مع الزمن والمسافة، ويصل للموصل على جهازه.</div></div>
+    </div>
+
+    <div class="pane" id="p-prio">
+      <input id="opsName" placeholder="اسمك (يُسجَّل عند استلام الأولويات)" style="width:100%;margin-bottom:6px">
+      <div id="plist"><div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div></div>
     </div>
 
     <div class="pane" id="p-feed">
@@ -470,6 +489,12 @@
       if (m.t === 'snapshot') {
         for (const d of m.drivers) { const old = drivers.get(d.id); drivers.set(d.id, { ...old, ...d }); }
         (m.orders || []).forEach(o => ordersM.set(o.id, o));
+        prsM.clear(); (m.priorities || []).forEach(p => prsM.set(p.id, p)); renderPrio();
+      }
+      else if (m.t === 'priority') {
+        if (PR_OPEN_ST.has(m.p.status)) { if (!prsM.has(m.p.id) && ['P0','P1'].includes(m.p.severity)) sosSound(); prsM.set(m.p.id, m.p); }
+        else prsM.delete(m.p.id);
+        renderPrio();
       }
       else if (m.t === 'driver') { const old = drivers.get(m.d.id); drivers.set(m.d.id, { ...old, ...m.d }); }
       else if (m.t === 'gps') { const d = drivers.get(m.id); if (d) { d.last = m.last; d.online = true;
@@ -505,6 +530,38 @@
     };
   }
   setInterval(() => { renderDrivers(); }, 5000);
+
+  // ================= ⚡ الأولويات: طابور مهام الفريق (Priority Engine) =================
+  const prsM = new Map();
+  const PR_OPEN_ST = new Set(['detected','notified','acknowledged','in_progress','escalated']);
+  $('opsName').value = localStorage.getItem('ops_name') || '';
+  $('opsName').addEventListener('change', () => localStorage.setItem('ops_name', $('opsName').value.trim()));
+  const myName = () => $('opsName').value.trim() || 'العمليات';
+  function prioAge(ms) { const m = Math.floor(ms / 60000); return m < 1 ? 'الآن' : m < 60 ? 'منذ ' + m + ' د' : 'منذ ' + Math.floor(m/60) + ' س ' + (m%60) + ' د'; }
+  function renderPrio() {
+    const list = [...prsM.values()].sort((a, b) => b.score - a.score || a.createdAt - b.createdAt);
+    const badge = $('prioBadge');
+    badge.style.display = list.length ? 'inline-block' : 'none';
+    badge.textContent = list.length;
+    if (!list.length) { $('plist').innerHTML = '<div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div>'; return; }
+    $('plist').innerHTML = list.map(p => `
+      <div class="prio-item ${p.escalationLevel ? 'esc' : ''}">
+        <span class="prio-sev ${esc(p.severity)}">${esc(p.severity)}</span><b>${esc(p.title)}</b>
+        <div class="prio-meta">${esc(p.id)} · ${p.assignedTo ? '👤 ' + esc(p.assignedTo) : '⏳ بانتظار ' + esc(p.assignedRole)}
+          · ${prioAge(Date.now() - p.createdAt)}${p.escalationLevel ? ' · ⏫ تصعيد ' + p.escalationLevel : ''}</div>
+        ${p.recommendedAction ? `<div class="prio-meta">💡 ${esc(p.recommendedAction)}</div>` : ''}
+        <div class="prio-act">
+          ${p.ackAt ? '' : `<button class="ok" onclick="prioAct('${esc(p.id)}','ack')">✋ استلمت</button>`}
+          ${p.ackAt && p.status !== 'in_progress' ? `<button onclick="prioAct('${esc(p.id)}','start')">▶ بدأت</button>` : ''}
+          ${p.ackAt ? `<button class="ok" onclick="prioAct('${esc(p.id)}','resolve')">✔ حُلّت</button>` : ''}
+        </div>
+      </div>`).join('');
+  }
+  window.prioAct = (id, action) => {
+    const note = action === 'resolve' ? (prompt('ما النتيجة؟ (تُسجَّل في سجل الأولوية)') || 'عولجت') : undefined;
+    ws && ws.send(JSON.stringify({ t: 'priority_action', id, action, who: myName(), note }));
+  };
+  setInterval(renderPrio, 30_000);   // تحديث الأعمار
 
   // ================= البث والإعلان =================
   function feedAdd(who, text, audio) {

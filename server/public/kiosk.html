@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dyar Executive Brain — عقل ديار التنفيذي</title>
+<style>
+  :root{ --bg:#0c0f16; --surface:#1a1f2b; --line:#2b3245; --text:#e9ebf1; --muted:#98a1b4;
+         --accent:#e2432e; --online:#3fbf77; --busy:#e2a43c; --alert:#e25555; --sky:#4da3ff }
+  *{box-sizing:border-box; margin:0; -webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{background:radial-gradient(1200px 700px at 50% -10%, #141a28 0%, var(--bg) 60%);
+       color:var(--text); font-family:"Segoe UI",Tahoma,Arial,sans-serif; overflow:hidden;
+       display:flex; flex-direction:column; user-select:none; cursor:default}
+
+  /* وضع الإنذار التشغيلي (P0 مفتوحة): إطار أحمر نابض + شريط تنبيه */
+  body.mode-p0{animation:p0bg 1.2s infinite alternate}
+  @keyframes p0bg{from{box-shadow:inset 0 0 0 0 rgba(226,85,85,0)} to{box-shadow:inset 0 0 0 12px rgba(226,85,85,.55)}}
+  #alertBar{display:none; background:linear-gradient(90deg,#5b1616,#8a1f1f); color:#ffd7d7; text-align:center;
+            font-size:2.2vh; font-weight:800; padding:1vh; letter-spacing:.05em}
+  body.mode-p0 #alertBar{display:block; animation:blink 1.2s infinite alternate}
+  @keyframes blink{from{opacity:1} to{opacity:.65}}
+
+  header{display:flex; align-items:center; justify-content:space-between; padding:1.6vh 3vw 0}
+  .brand{display:flex; align-items:center; gap:1vw}
+  .brand .logo{width:5.2vh; height:5.2vh; border-radius:30%; display:grid; place-items:center;
+               background:linear-gradient(135deg,var(--accent),#8f2417); font-size:2.8vh}
+  .brand h1{font-size:2.9vh; font-weight:800} .brand h1 b{color:var(--accent)}
+  .brand .sub{font-size:1.55vh; color:var(--muted)}
+  #sysDot{display:inline-block; width:1.3vh; height:1.3vh; border-radius:50%; background:var(--busy); margin-inline-start:.5vw}
+  #sysDot.ok{background:var(--online); box-shadow:0 0 8px var(--online)}
+  .clockbox{text-align:left}
+  #clock{font-size:5.8vh; font-weight:800; font-variant-numeric:tabular-nums; line-height:1; direction:ltr}
+  #clock small{font-size:2.2vh; color:var(--muted); font-weight:600}
+  #dateLine{font-size:1.9vh; color:var(--muted); margin-top:.5vh}
+  #aiBadge{font-size:1.45vh; color:var(--online); margin-top:.3vh; min-height:1.6vh}
+
+  .kpis{display:grid; grid-template-columns:repeat(7,1fr); gap:.8vw; padding:1.6vh 3vw 0}
+  .kpi{background:var(--surface); border:1px solid var(--line); border-radius:1.5vh; padding:1.2vh .8vw; text-align:center}
+  .kpi .v{font-size:3.9vh; font-weight:800; font-variant-numeric:tabular-nums; line-height:1.15}
+  .kpi .l{font-size:1.5vh; color:var(--muted); margin-top:.3vh}
+  .kpi .s{font-size:1.35vh; color:var(--muted); min-height:1.6vh}
+  .kpi.good .v{color:var(--online)} .kpi.warn .v{color:var(--busy)} .kpi.bad .v{color:var(--alert)}
+
+  main{flex:1; display:grid; grid-template-columns:1.15fr 1fr; gap:1.2vw; padding:1.6vh 3vw; min-height:0}
+  .stage{display:flex; flex-direction:column; align-items:center; gap:1.2vh; min-height:0}
+  #orb{width:17vh; height:17vh; border-radius:50%; cursor:pointer; position:relative; flex:none;
+       background:radial-gradient(circle at 35% 30%, #ff7a5c 0%, var(--accent) 45%, #6e1c10 100%);
+       box-shadow:0 0 5vh rgba(226,67,46,.35); display:grid; place-items:center;
+       animation:breathe 3.2s ease-in-out infinite; transition:box-shadow .3s}
+  #orb .icon{font-size:6.5vh; filter:drop-shadow(0 2px 8px rgba(0,0,0,.4))}
+  @keyframes breathe{0%,100%{transform:scale(1)} 50%{transform:scale(1.045)}}
+  body.listening #orb{background:radial-gradient(circle at 35% 30%, #7ef0ae 0%, var(--online) 45%, #145b36 100%);
+                      box-shadow:0 0 7vh rgba(63,191,119,.55); animation:breathe 1s ease-in-out infinite}
+  body.thinking  #orb{background:radial-gradient(circle at 35% 30%, #9ecbff 0%, var(--sky) 45%, #17456e 100%);
+                      box-shadow:0 0 7vh rgba(77,163,255,.5)}
+  body.speaking  #orb{animation:breathe .8s ease-in-out infinite}
+  #orbState{font-size:2vh; color:var(--muted); min-height:2.4vh; text-align:center}
+  #answer{background:var(--surface); border:1px solid var(--line); border-radius:2vh; padding:1.8vh 1.6vw;
+          font-size:2.55vh; line-height:1.75; width:100%; overflow:auto; flex:1; min-height:0}
+  #answer .who{color:var(--accent); font-weight:800; font-size:1.8vh; display:block; margin-bottom:.6vh}
+  #asOf{font-size:1.45vh; color:var(--muted); width:100%; text-align:left; direction:ltr; min-height:1.8vh}
+
+  aside{display:flex; flex-direction:column; gap:1.2vh; min-height:0}
+  .panel{background:var(--surface); border:1px solid var(--line); border-radius:2vh; padding:1.5vh 1.2vw; overflow:auto}
+  .panel h2{font-size:1.9vh; color:var(--muted); margin-bottom:1vh; font-weight:700; display:flex; justify-content:space-between}
+  #prioPanel{flex:1; min-height:0}
+  .pr{display:flex; align-items:center; gap:.8vw; padding:1vh .4vw; border-bottom:1px dashed var(--line); font-size:1.95vh}
+  .pr:last-child{border-bottom:none}
+  .pr .sev{font-weight:800; font-size:1.7vh; padding:.2vh .5vw; border-radius:.8vh; flex:none}
+  .sev.P0,.sev.P1{background:#3a1518; color:#ff9c9c} .sev.P2{background:#37280f; color:#f0c069}
+  .sev.P3{background:#2c2f1a; color:#d8d873} .sev.P4{background:#16301f; color:#7fd8a5}
+  .pr .body{flex:1; min-width:0} .pr .t{line-height:1.45}
+  .pr .meta{font-size:1.45vh; color:var(--muted)}
+  .pr .age{font-variant-numeric:tabular-nums; direction:ltr; color:var(--busy); font-size:1.6vh; flex:none}
+  .pr button{flex:none; font:inherit; font-size:1.55vh; padding:.7vh .8vw; border-radius:1vh; cursor:pointer;
+             border:1px solid var(--line); background:var(--bg); color:var(--text)}
+  .pr button:focus{outline:2px solid var(--sky)}
+  .pr.acked button{border-color:var(--online); color:var(--online)}
+  .pr.esc{background:rgba(226,85,85,.08)}
+  #prioEmpty{color:var(--muted); font-size:1.9vh; padding:1.5vh 0}
+  .hints{font-size:1.55vh; color:var(--muted); line-height:1.9}
+  .hints b{color:var(--text)}
+  body.private #prioPanel,body.private #answer{filter:blur(1.6vh)}
+  body.private #privBtn{background:#361b1e; border-color:var(--alert); color:#ffb3b3}
+
+  footer{display:flex; align-items:center; gap:.7vw; padding:0 3vw 1.8vh}
+  footer input{flex:1; padding:1.4vh 1vw; font-size:2vh; border-radius:1.3vh; border:1px solid var(--line);
+               background:var(--surface); color:var(--text); user-select:text}
+  footer button{font:inherit; cursor:pointer; border:1px solid var(--line); background:var(--surface); color:var(--text);
+                border-radius:1.3vh; padding:1.4vh 1vw; font-size:1.8vh; font-weight:700; white-space:nowrap}
+  footer button.acc{background:var(--accent); border-color:var(--accent); color:#fff}
+  footer button.on{background:#173225; border-color:var(--online); color:var(--online)}
+
+  #gate{position:fixed; inset:0; background:var(--bg); display:grid; place-items:center; z-index:50}
+  #gate .card{background:var(--surface); border:1px solid var(--line); border-radius:2vh; padding:4vh 3vw; text-align:center; width:min(430px,90vw)}
+  #gate h1{font-size:3vh; margin-bottom:1vh} #gate h1 b{color:var(--accent)}
+  #gate p{color:var(--muted); font-size:1.85vh; margin-bottom:2.4vh; line-height:1.7}
+  #gate input{width:100%; padding:1.8vh; font-size:2.5vh; text-align:center; border-radius:1.4vh;
+              border:1px solid var(--line); background:var(--bg); color:var(--text); letter-spacing:.4em; user-select:text}
+  #gate button{margin-top:2vh; width:100%; padding:1.7vh; font-size:2.1vh; font-weight:800; color:#fff;
+               background:var(--accent); border:none; border-radius:1.4vh; cursor:pointer}
+  #gateErr{color:var(--alert); font-size:1.75vh; margin-top:1.3vh; min-height:2vh}
+  .hidden{display:none !important}
+</style>
+</head>
+<body>
+
+<div id="gate">
+  <div class="card">
+    <h1>🧠 Dyar <b>Executive Brain</b></h1>
+    <p>عقل ديار التنفيذي — شاشة غرفة العمليات<br>أدخل رمز اللوحة (OPS PIN) مرة واحدة</p>
+    <input id="gatePin" type="password" inputmode="numeric" autocomplete="off" placeholder="••••">
+    <button id="gateGo">دخول</button>
+    <div id="gateErr"></div>
+  </div>
+</div>
+
+<div id="alertBar">⚠ OPERATIONAL ATTENTION REQUIRED — تنبيه تشغيلي عاجل</div>
+
+<header>
+  <div class="brand">
+    <div class="logo">🧠</div>
+    <div>
+      <h1>عقل <b>ديار</b> التنفيذي <span id="sysDot" title="حالة الاتصال"></span></h1>
+      <div class="sub">قُل: «يا ديار …» — البعنة · دير الأسد · مجد الكروم · كرمئيل</div>
+    </div>
+  </div>
+  <div class="clockbox">
+    <div id="clock">--:--</div>
+    <div id="dateLine">—</div>
+    <div id="aiBadge"></div>
+  </div>
+</header>
+
+<div class="kpis">
+  <div class="kpi" id="kToday"><div class="v">0</div><div class="l">طلبات اليوم</div><div class="s">—</div></div>
+  <div class="kpi good" id="kDone"><div class="v">0</div><div class="l">أُنجز اليوم</div><div class="s">—</div></div>
+  <div class="kpi" id="kYest"><div class="v">0</div><div class="l">أمس</div><div class="s">—</div></div>
+  <div class="kpi warn" id="kActive"><div class="v">0</div><div class="l">نشط الآن</div><div class="s">—</div></div>
+  <div class="kpi" id="kRisk"><div class="v">0</div><div class="l">في الخطر</div><div class="s">P0+P1</div></div>
+  <div class="kpi" id="kOnline"><div class="v">0</div><div class="l">موصلون متصلون</div><div class="s">—</div></div>
+  <div class="kpi" id="kPrio"><div class="v">0</div><div class="l">أولويات مفتوحة</div><div class="s">—</div></div>
+</div>
+
+<main>
+  <section class="stage">
+    <div id="orb" title="اضغط للسؤال"><div class="icon">🎙</div></div>
+    <div id="orbState">اضغط الدائرة أو قُل «يا ديار» ثم اسأل</div>
+    <div id="answer"><span class="who">عقل ديار</span><span id="answerText">أهلاً بكم في غرفة عمليات ديار. قولوا «يا ديار» ثم اسألوا: كم طلبية أمس؟ ما المشاكل؟ شو عندي؟ ما برنامج اليوم؟</span></div>
+    <div id="asOf"></div>
+  </section>
+  <aside>
+    <div class="panel" id="prioPanel">
+      <h2><span>⚡ LIVE PRIORITIES — الأولويات الحية</span><span id="prioCounts"></span></h2>
+      <div id="priosList"><div id="prioEmpty">🟢 لا أولويات مفتوحة — التشغيل مستقر</div></div>
+    </div>
+    <div class="panel hints">
+      <h2>💬 أوامر صوتية</h2>
+      «<b>يا ديار، أنا أمين</b>» ترحيب وتخصيص ·
+      «<b>يا ديار، كم طلبية أمس؟</b>» ·
+      «<b>يا ديار، ما المشاكل؟</b>» ·
+      «<b>يا ديار، شو عندي؟</b>» مهامك ·
+      «<b>يا ديار، مين عليه ضغط؟</b>» حمل الفريق ·
+      «<b>يا ديار، استلمت</b>» تأكيد أول أولوية ·
+      «<b>يا ديار، أوقف</b>» إسكات فوري
+    </div>
+  </aside>
+</main>
+
+<footer>
+  <input id="txt" placeholder="أو اكتب سؤالك هنا (لتلفاز بلا مايكروفون)…">
+  <button class="acc" id="sendBtn">إرسال</button>
+  <button id="alwaysBtn">🎙 «يا ديار»: مغلق</button>
+  <button id="langBtn">🌐 ع</button>
+  <button id="privBtn">🔒 خصوصية</button>
+  <button id="fsBtn">⛶</button>
+</footer>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const norm = (s) => String(s || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/[ً-ْ]/g, '').trim();
+const pin = () => localStorage.getItem('kiosk_pin') || '';
+
+/* ===== الطاقم: يصل من الخادم (KIOSK_STAFF) — الاسم المطبَّع ← اللقب الكامل ===== */
+let staffMap = { 'امين': 'المدير أمين', 'محمد': 'الأستاذ محمد' };
+let currentStaff = localStorage.getItem('kiosk_me') || '';
+function applyStaff(list) {
+  if (!Array.isArray(list) || !list.length) return;
+  staffMap = {};
+  for (const s of list) staffMap[norm(s.name)] = `${s.title} ${s.name}`;
+}
+
+/* ===== الساعة والتاريخ ===== */
+const fmtDate = new Intl.DateTimeFormat('ar', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+function tickClock() {
+  const n = new Date();
+  const hh = n.getHours(), mm = String(n.getMinutes()).padStart(2,'0'), ss = String(n.getSeconds()).padStart(2,'0');
+  const h12 = ((hh + 11) % 12) + 1, ap = hh < 12 ? 'ص' : 'م';
+  $('#clock').innerHTML = `${String(h12).padStart(2,'0')}:${mm}<small> ${ss} ${ap}</small>`;
+  $('#dateLine').textContent = 'اليوم ' + fmtDate.format(n);
+}
+setInterval(tickClock, 500); tickClock();
+const partOfDay = () => { const h = new Date().getHours(); return h < 12 ? 'صباح الخير' : h < 17 ? 'مساء الخير' : 'مساء النور'; };
+
+/* ===== اللغة (STT/TTS): عربي / عبري / إنجليزي ===== */
+const LANGS = [{ c:'ar', l:'ع' }, { c:'he', l:'עב' }, { c:'en', l:'EN' }];
+let langIdx = Math.max(0, LANGS.findIndex(x => x.c === localStorage.getItem('kiosk_lang')));
+const lang = () => LANGS[langIdx].c;
+$('#langBtn').onclick = () => { langIdx = (langIdx + 1) % LANGS.length; localStorage.setItem('kiosk_lang', lang());
+  $('#langBtn').textContent = '🌐 ' + LANGS[langIdx].l; };
+$('#langBtn').textContent = '🌐 ' + LANGS[langIdx].l;
+
+/* ===== النطق ===== */
+let voices = [];
+function loadVoices() { voices = speechSynthesis.getVoices(); }
+if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+function speak(text, then) {
+  if (!('speechSynthesis' in window) || privateMode) { then && then(); return; }
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(String(text).replace(/[🟢🟠🔴🟡⚡📺🎙⏫↩️•⚠]/g, ''));
+  u.lang = lang();
+  const v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(lang())); if (v) u.voice = v;
+  u.rate = 1.03;
+  document.body.classList.add('speaking'); speakingNow = true;
+  u.onend = u.onerror = () => { speakingNow = false; document.body.classList.remove('speaking'); then && then(); };
+  speechSynthesis.speak(u);
+}
+const shutUp = () => { if ('speechSynthesis' in window) speechSynthesis.cancel(); speakingNow = false; document.body.classList.remove('speaking','thinking'); };
+let speakingNow = false;
+
+/* ===== وضع الخصوصية: تمويه اللوحات الحساسة + كتم النطق ===== */
+let privateMode = false;
+$('#privBtn').onclick = () => { privateMode = !privateMode; document.body.classList.toggle('private', privateMode); if (privateMode) shutUp(); };
+
+/* ===== عرض الجواب ===== */
+function showAnswer(text, who = 'عقل ديار', asOf) {
+  $('#answer').innerHTML = `<span class="who">${esc(who)}</span>` + esc(text);
+  $('#answer').scrollTop = 0;
+  $('#asOf').textContent = asOf ? 'DATA AS OF ' + new Date(asOf).toLocaleTimeString('en-GB') : '';
+}
+
+/* ===== REST ===== */
+async function fetchSummary() {
+  const r = await fetch('/api/brain/summary', { headers: { 'x-kiosk-pin': pin() } });
+  if (r.status === 401) throw new Error('pin');
+  return r.json();
+}
+async function ask(q) {
+  const r = await fetch('/api/brain/ask', { method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ pin: pin(), q, staff: currentStaff }) });
+  if (!r.ok) throw new Error('http ' + r.status);
+  return r.json();
+}
+
+/* ===== المؤشرات ===== */
+function setKpi(id, v, sub, cls) {
+  const el = $(id); el.querySelector('.v').textContent = v;
+  if (sub !== undefined) el.querySelector('.s').textContent = sub;
+  if (cls !== undefined) el.className = 'kpi' + (cls ? ' ' + cls : '');
+}
+function renderSummary(s) {
+  setKpi('#kToday',  s.today.created,   `أُلغي ${s.today.cancelled}`);
+  setKpi('#kDone',   s.today.delivered, s.yesterday.delivered ? `أمس ${s.yesterday.delivered}` : '');
+  setKpi('#kYest',   s.yesterday.created, `أُنجز ${s.yesterday.delivered}`);
+  setKpi('#kActive', s.active, `${s.waiting} في الانتظار`, s.waiting ? 'warn' : '');
+  setKpi('#kOnline', s.online, `من ${s.devices} جهاز`, s.online ? 'good' : 'bad');
+  applyStaff(s.staff);
+  $('#aiBadge').textContent = s.ai ? '⚡ الاستدلال: عقل كلاودي (Claude) + بوابة أدوات' : '⚙ الاستدلال المحلي الفوري';
+  if (s.prOpen) syncPriorities(s.prOpen, true);
+}
+
+/* ===== الأولويات الحية ===== */
+const prs = new Map();                          // id -> priority
+const OPEN_ST = new Set(['detected','notified','acknowledged','in_progress','escalated']);
+function syncPriorities(list, replace) {
+  if (replace) prs.clear();
+  for (const p of list) OPEN_ST.has(p.status) ? prs.set(p.id, p) : prs.delete(p.id);
+  renderPriorities();
+}
+function onPriority(p) {                        // حدث WS مفرد
+  const known = prs.has(p.id);
+  const wasEsc = known && prs.get(p.id).escalationLevel;
+  if (OPEN_ST.has(p.status)) prs.set(p.id, p); else prs.delete(p.id);
+  renderPriorities();
+  if (privateMode) return;
+  const urgent = p.severity === 'P0' || p.severity === 'P1';
+  if (!known && OPEN_ST.has(p.status) && urgent)
+    speak(`تنبيه للعمليات. ${p.title}. أُسند إلى ${p.assignedTo || (p.assignedRole === 'management' ? 'الإدارة' : 'فريق العمليات')}. للتأكيد قولوا: يا ديار استلمت.`);
+  else if (known && urgent && p.escalationLevel > wasEsc && !p.ackAt)
+    speak(`الأولوية ${p.id} لم يُؤكَّد استلامها بعد. ${p.title}.`);
+}
+const fmtAge = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return String(Math.floor(s / 60)).padStart(2,'0') + ':' + String(s % 60).padStart(2,'0'); };
+function renderPriorities() {
+  const list = [...prs.values()].sort((a, b) => b.score - a.score || a.createdAt - b.createdAt);
+  const counts = { P0:0, P1:0, P2:0 };
+  for (const p of list) if (p.severity in counts) counts[p.severity]++;
+  $('#prioCounts').textContent = list.length ? `🔴 ${counts.P0 + counts.P1} · 🟠 ${counts.P2}` : '';
+  setKpi('#kRisk', counts.P0 + counts.P1, undefined, counts.P0 + counts.P1 ? 'bad' : 'good');
+  setKpi('#kPrio', list.length, undefined, list.length > 5 ? 'warn' : '');
+  document.body.classList.toggle('mode-p0', counts.P0 > 0);
+  if (!list.length) { $('#priosList').innerHTML = '<div id="prioEmpty">🟢 لا أولويات مفتوحة — التشغيل مستقر</div>'; return; }
+  $('#priosList').innerHTML = list.slice(0, 9).map(p => `
+    <div class="pr ${p.ackAt ? 'acked' : ''} ${p.escalationLevel ? 'esc' : ''}" data-id="${esc(p.id)}">
+      <span class="sev ${esc(p.severity)}">${esc(p.severity)}</span>
+      <div class="body">
+        <div class="t">${esc(p.title)}</div>
+        <div class="meta">${esc(p.id)} · ${p.assignedTo ? '👤 ' + esc(p.assignedTo) : '⏳ بانتظار ' + esc(p.assignedRole)}${p.escalationLevel ? ' · ⏫ تصعيد ' + p.escalationLevel : ''}</div>
+      </div>
+      <span class="age" data-at="${p.createdAt}">${fmtAge(Date.now() - p.createdAt)}</span>
+      <button data-act="${p.ackAt ? 'resolve' : 'ack'}">${p.ackAt ? 'حُلّت' : 'استلمت'}</button>
+    </div>`).join('');
+}
+setInterval(() => { for (const el of document.querySelectorAll('.pr .age')) el.textContent = fmtAge(Date.now() - +el.dataset.at); }, 1000);
+$('#priosList').addEventListener('click', (e) => {
+  const btn = e.target.closest('button'); if (!btn) return;
+  const id = btn.closest('.pr').dataset.id, act = btn.dataset.act;
+  const who = currentStaff || 'شاشة المكتب';
+  const note = act === 'resolve' ? (prompt('ما النتيجة؟ (تُسجَّل في التوثيق)') || 'عولجت') : undefined;
+  prAction(id, act, who, note);
+});
+function prAction(id, action, who, note) {
+  if (wsOpen()) ws.send(JSON.stringify({ t: 'priority_action', id, action, who, note }));
+  else fetch('/api/brain/priority-action', { method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({ pin: pin(), id, action, who, note }) }).catch(() => {});
+}
+
+/* ===== WebSocket حي (بث الأولويات والطوارئ لحظياً) ===== */
+let ws = null, wsRetry = 0;
+const wsOpen = () => ws && ws.readyState === 1;
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.onopen = () => { wsRetry = 0; ws.send(JSON.stringify({ t:'hello', role:'ops', pin: pin(), name:'شاشة عقل ديار' })); $('#sysDot').classList.add('ok'); };
+  ws.onclose = () => { $('#sysDot').classList.remove('ok'); setTimeout(connectWS, Math.min(15000, 1000 * 2 ** wsRetry++)); };
+  ws.onmessage = (ev) => {
+    let m; try { m = JSON.parse(ev.data); } catch { return; }
+    if (m.t === 'snapshot') { applyStaff(m.staff); syncPriorities(m.priorities || [], true); }
+    else if (m.t === 'priority') onPriority(m.p);
+    else if (m.t === 'sos' && !privateMode) speak(`طوارئ! إشارة استغاثة من ${m.name}. تواصلوا معه فوراً.`);
+  };
+}
+
+/* ===== فهم الجملة ===== */
+async function handleUtterance(raw) {
+  const q = String(raw || '').trim();
+  if (!q) return;
+  const t = norm(q);
+  if (/^(اوقف|توقف|اسكت|سكوت|قف|stop|שקט)/.test(t)) { shutUp(); $('#orbState').textContent = 'توقفت.'; return; }
+  if (/استلمت|تم الاستلام/.test(t)) {                       // تأكيد صوتي لأول أولوية غير مستلمة
+    const first = [...prs.values()].filter(p => !p.ackAt).sort((a, b) => b.score - a.score)[0];
+    if (!first) { const g = 'لا أولويات بانتظار الاستلام.'; showAnswer(g); speak(g, maybeRestartListening); return; }
+    prAction(first.id, 'ack', currentStaff || 'شاشة المكتب');
+    const g = `تم — سجّلت استلام ${first.id} باسم ${currentStaff || 'العمليات'}.`;
+    showAnswer(g); speak(g, maybeRestartListening);
+    return;
+  }
+  const m = t.match(/(?:انا|معك|هذا)\s+([ء-ي]+)/);          // «أنا أمين» / «معك محمد»
+  if (m) {
+    const title = staffMap[m[1]] || ('أستاذ ' + m[1]);
+    currentStaff = title; localStorage.setItem('kiosk_me', title);
+    const g = `${partOfDay()}، أهلاً بك ${title}! أنا عقل ديار التنفيذي. اسألني عن العمليات أو قل «شو عندي» لمهامك.`;
+    showAnswer(g); speak(g, maybeRestartListening);
+    return;
+  }
+  if (/^(مرحبا|اهلا|هلا|السلام عليكم|صباح الخير|مساء الخير)$/.test(t)) {
+    const g = `${partOfDay()} وأهلاً بكم في غرفة عمليات ديار! تفضلوا بالسؤال.`;
+    showAnswer(g); speak(g, maybeRestartListening);
+    return;
+  }
+  showAnswer(q, currentStaff || 'سؤال');
+  document.body.classList.add('thinking');
+  $('#orbState').textContent = 'أفحص البيانات الحية…';        // استجابة فورية قبل اكتمال التحليل
+  try {
+    const j = await ask(q);
+    document.body.classList.remove('thinking');
+    $('#orbState').textContent = 'اسألني المزيد — اضغط الدائرة أو قل «يا ديار»';
+    showAnswer(j.answer, 'عقل ديار', j.asOf);
+    speak(j.answer, maybeRestartListening);
+  } catch {
+    document.body.classList.remove('thinking');
+    const msg = 'تعذر الوصول للخادم — تأكدوا من الشبكة وحاولوا ثانية.';
+    $('#orbState').textContent = ''; showAnswer(msg); speak(msg, maybeRestartListening);
+  }
+}
+
+/* ===== الاستماع + كلمة التنبيه «ديار» =====
+   وضع «يا ديار» الدائم: التعرّف يعمل محلياً في المتصفح ولا يُعالَج أي كلام إلا ما جاء بعد كلمة التنبيه.
+   أثناء نطق الشاشة تُقبل فقط الجمل التي تحوي «ديار» (منع صدى السماعة) — وهي أيضاً طريق المقاطعة. */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const WAKE = ['ديار', 'يا ديار', 'dyar', 'דיאר'];
+let rec = null, listening = false, alwaysOn = false, armedUntil = 0;
+function extractCommand(t) {                     // يرجع ما بعد كلمة التنبيه، أو null إن لم تُذكر
+  for (const w of WAKE) { const i = t.indexOf(w); if (i !== -1) return t.slice(i + w.length).replace(/^[،,.\s]+/, ''); }
+  return null;
+}
+function startListening(oneShot) {
+  if (!SR) { $('#txt').focus(); $('#orbState').textContent = 'هذا المتصفح بلا تعرّف صوتي — اكتبوا بالأسفل'; return; }
+  if (listening) return;
+  if (oneShot) shutUp();
+  rec = new SR();
+  rec.lang = lang() === 'ar' ? 'ar' : lang() === 'he' ? 'he-IL' : 'en-US';
+  rec.interimResults = false; rec.maxAlternatives = 1;
+  listening = true;
+  document.body.classList.add('listening');
+  $('#orbState').textContent = oneShot ? '🟢 أصغي إليك… تكلم الآن' : '👂 «يا ديار» — أنا منتبه';
+  rec._oneShot = !!oneShot;
+  rec.onresult = (e) => {
+    const heard = norm(e.results[0][0].transcript);
+    if (rec._oneShot) return void handleUtterance(heard);
+    const cmd = extractCommand(heard);
+    if (cmd !== null) {
+      if (!cmd) { armedUntil = Date.now() + 8000; shutUp(); const g = 'نعم؟ تفضل.'; $('#orbState').textContent = g; speak(g, maybeRestartListening); }
+      else { shutUp(); handleUtterance(cmd); }
+    } else if (Date.now() < armedUntil && !speakingNow) { armedUntil = 0; handleUtterance(heard); }
+  };
+  rec.onerror = () => {};
+  rec.onend = () => {
+    listening = false;
+    document.body.classList.remove('listening');
+    if (alwaysOn && !document.body.classList.contains('thinking'))
+      setTimeout(() => { if (alwaysOn && !listening) startListening(false); }, 350);
+  };
+  try { rec.start(); } catch { listening = false; document.body.classList.remove('listening'); }
+}
+function maybeRestartListening() { if (alwaysOn && !listening) setTimeout(() => startListening(false), 250); }
+
+$('#orb').onclick = () => startListening(true);
+$('#alwaysBtn').onclick = () => {
+  alwaysOn = !alwaysOn;
+  $('#alwaysBtn').textContent = '🎙 «يا ديار»: ' + (alwaysOn ? 'منتبه' : 'مغلق');
+  $('#alwaysBtn').classList.toggle('on', alwaysOn);
+  if (alwaysOn) startListening(false); else if (rec) try { rec.abort(); } catch {}
+};
+$('#fsBtn').onclick = () => { (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {}); };
+$('#sendBtn').onclick = () => { const v = $('#txt').value.trim(); $('#txt').value = ''; handleUtterance(v); };
+$('#txt').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('#sendBtn').onclick(); });
+document.addEventListener('keydown', (e) => {          // زر OK من ريموت التلفاز = اسأل الآن
+  if (e.target === $('#txt') || e.target === $('#gatePin') || e.target.tagName === 'BUTTON') return;
+  if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); startListening(true); }
+});
+
+/* ===== البوابة ===== */
+let pollTimer = null;
+async function startPolling() {
+  const loop = async () => { try { renderSummary(await fetchSummary()); } catch (e) { if (e.message === 'pin') return openGate('انتهت صلاحية الرمز — أدخله من جديد'); } };
+  await loop(); clearInterval(pollTimer); pollTimer = setInterval(loop, 10_000);
+}
+function openGate(msg) {
+  clearInterval(pollTimer);
+  $('#gate').classList.remove('hidden');
+  $('#gateErr').textContent = msg || '';
+  $('#gatePin').value = ''; $('#gatePin').focus();
+}
+async function enter(hello) {
+  $('#gate').classList.add('hidden');
+  startPolling(); connectWS();
+  if (hello) { const g = `${partOfDay()}! أنا عقل ديار التنفيذي، جاهز في غرفة العمليات. قولوا «يا ديار» ثم اسألوا، أو عرّفوا عن أنفسكم.`; showAnswer(g); speak(g); }
+}
+async function tryGate() {
+  const v = $('#gatePin').value.trim();
+  if (!v) return;
+  localStorage.setItem('kiosk_pin', v);
+  try { renderSummary(await fetchSummary()); enter(true); }
+  catch { $('#gateErr').textContent = 'رمز غير صحيح — حاول ثانية'; localStorage.removeItem('kiosk_pin'); }
+}
+$('#gateGo').onclick = tryGate;
+$('#gatePin').addEventListener('keydown', (e) => { if (e.key === 'Enter') tryGate(); });
+(async () => { if (!pin()) return; try { renderSummary(await fetchSummary()); enter(false); } catch {} })();
+</script>
+</body>
+</html>
