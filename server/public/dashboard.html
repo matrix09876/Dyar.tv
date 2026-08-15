@@ -185,7 +185,10 @@
 
     <div class="pane" id="p-prio">
       <input id="opsName" placeholder="اسمك (يُسجَّل عند استلام الأولويات)" style="width:100%;margin-bottom:6px">
+      <div id="linksStrip" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px"></div>
       <div id="plist"><div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div></div>
+      <div style="font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:700">🤖 فريق الوكلاء — آخر عمل حقيقي لكل وكيل</div>
+      <div id="agentsRoster" class="empty" style="font-size:12px">ينبض مع أول تشغيل…</div>
     </div>
 
     <div class="pane" id="p-feed">
@@ -208,6 +211,11 @@
     </div>
   </div>
 </div>
+
+<dialog id="cmdDlg" style="max-width:560px;width:92vw;margin-top:8vh">
+  <input id="cmdQ" placeholder="⌘K — ابحث أو نفّذ: رقم طلب، موصل، متجر، أمر…" style="width:100%;font-size:15px;padding:11px">
+  <div id="cmdList" style="max-height:52vh;overflow:auto;margin-top:8px"></div>
+</dialog>
 
 <dialog id="brainDlg" style="max-width:540px;width:92vw">
   <h3>🧠 اسأل عقل ديار</h3>
@@ -807,9 +815,77 @@
       $('cToday').textContent = s.today.created;
       $('cDone').textContent = s.today.delivered;
       $('cGoal').textContent = s.goal ? '/' + s.goal : '';
+      renderAgents(s.agents || {}); renderLinks(s.links || {});
     } catch {}
   }
   setInterval(pollSummary, 30_000);
+  // 🤖 سجل الوكلاء: كل وكيل بآخر عمل حقيقي قام به — لا صناديق سوداء
+  function renderAgents(a) {
+    const names = Object.keys(a);
+    if (!names.length) return;
+    $('agentsRoster').className = '';
+    $('agentsRoster').innerHTML = names.sort((x, y) => a[y].lastAt - a[x].lastAt).map(n => `
+      <div class="prio-item" style="padding:6px 9px;margin-bottom:4px">
+        <b style="font-size:12px">${esc(n)}</b>
+        <span style="float:left;color:var(--muted);font-size:10.5px" class="num">${a[n].runs} تشغيلة · ${age(a[n].lastAt)}</span>
+        <div class="prio-meta">${esc(a[n].note || '—')}</div>
+      </div>`).join('');
+  }
+  // 🔌 شريط الوصلات الصادق: الحالة الحقيقية فقط — لا ضوء أخضر مزيف
+  function renderLinks(L) {
+    const dot = (c) => `<span class="dot" style="background:var(--${c})"></span>`;
+    const items = [
+      [L.brain === 'ok' ? 'online' : L.brain === 'err' ? 'alert' : 'busy', 'غرفة التشغيل', L.brainAt ? age(L.brainAt) : 'لم تتصل بعد'],
+      [L.osrm === 'ok' ? 'online' : L.osrm === 'down' ? 'alert' : 'offline', 'مسارات الطرق OSRM', L.osrm === 'down' ? 'متعثر — تقدير حتمي' : L.osrm === 'off' ? 'معطّل' : 'يعمل'],
+      [L.claude ? 'online' : 'offline', 'عقل كلاودي', L.claude ? 'مفعّل' : 'غير مفعّل (محلي)'],
+      [L.backupAt ? 'online' : 'busy', 'النسخ الاحتياطي', L.backupAt ? age(L.backupAt) : 'بانتظار أول نسخة'],
+    ];
+    $('linksStrip').innerHTML = items.map(([c, n, d]) =>
+      `<span class="chip" style="font-size:10.5px" title="${esc(d)}">${dot(c)}${esc(n)} · ${esc(d)}</span>`).join('');
+  }
+
+  // ================= ⌘K لوحة الأوامر: بحث ونفاذ فوري لكل شيء =================
+  const cmdActions = [
+    ['＋ طلب جديد', () => { cmdDlg.close(); $('newOrderBtn').click(); }],
+    ['🧠 اسأل عقل ديار', () => { cmdDlg.close(); brainDlg.showModal(); $('brainQ').focus(); }],
+    ['🌅 الإحاطة الصباحية', () => { cmdDlg.close(); brainDlg.showModal(); askBrain('الإحاطة الصباحية'); }],
+    ['🏪 إضافة متجر', () => { cmdDlg.close(); $('addStoreBtn').click(); }],
+    ['⚡ الأولويات', () => { cmdDlg.close(); document.querySelector('.tabs button[data-p="prio"]').click(); }],
+    ['📺 فتح شاشة عقل ديار', () => { cmdDlg.close(); window.open('/kiosk.html', '_blank'); }],
+  ];
+  let cmdIdx = 0, cmdItems = [];
+  function cmdRender() {
+    const q = $('cmdQ').value.trim();
+    cmdItems = [];
+    for (const [label, fn] of cmdActions) if (!q || label.includes(q)) cmdItems.push({ label, hint: 'أمر', fn });
+    if (q) {
+      for (const o of [...ordersM.values(), ...closedM.values()])
+        if ([o.id, o.ref, o.title, o.driverName].some(v => v && String(v).includes(q)))
+          cmdItems.push({ label: `📦 ${o.id}${o.ref ? ' · تطبيق #' + o.ref : ''} — ${o.title}`, hint: stTxt[o.status],
+            fn: () => { cmdDlg.close(); document.querySelector('.tabs button[data-p="orders"]').click(); $('ordSearch').value = o.id; renderOrders(); if (ordersM.has(o.id)) selectOrder(o.id, true); } });
+      for (const d of drivers.values()) if (d.name.includes(q))
+        cmdItems.push({ label: `🛵 ${d.name}`, hint: d.online ? 'متصل' : 'غير متصل',
+          fn: () => { cmdDlg.close(); selectDriver(d.id, true); } });
+      for (const { store: s } of storesM.values()) if (s.name.includes(q))
+        cmdItems.push({ label: `🏪 ${s.name}`, hint: 'متجر', fn: () => { cmdDlg.close(); zoomStore(s.id); } });
+    }
+    cmdItems = cmdItems.slice(0, 12);
+    cmdIdx = Math.min(cmdIdx, Math.max(0, cmdItems.length - 1));
+    $('cmdList').innerHTML = cmdItems.map((it, i) => `
+      <div class="cmd-row" data-i="${i}" style="display:flex;justify-content:space-between;gap:8px;padding:8px 10px;border-radius:8px;cursor:pointer;${i === cmdIdx ? 'background:var(--surface2,#161a24);outline:1px solid var(--line)' : ''}">
+        <span style="font-size:13px">${esc(it.label).slice(0, 70)}</span><span style="color:var(--muted);font-size:11px">${esc(it.hint)}</span>
+      </div>`).join('') || '<div class="empty">لا نتائج</div>';
+  }
+  document.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); cmdDlg.showModal(); $('cmdQ').value = ''; cmdIdx = 0; cmdRender(); $('cmdQ').focus(); }
+  });
+  $('cmdQ').addEventListener('input', () => { cmdIdx = 0; cmdRender(); });
+  $('cmdQ').addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown') { e.preventDefault(); cmdIdx = Math.min(cmdIdx + 1, cmdItems.length - 1); cmdRender(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); cmdIdx = Math.max(cmdIdx - 1, 0); cmdRender(); }
+    else if (e.key === 'Enter') { e.preventDefault(); cmdItems[cmdIdx]?.fn(); }
+  });
+  $('cmdList').addEventListener('click', (e) => { const r = e.target.closest('.cmd-row'); if (r) cmdItems[+r.dataset.i]?.fn(); });
 
   // ================= البث والإعلان =================
   function feedAdd(who, text, audio) {

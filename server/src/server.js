@@ -350,6 +350,7 @@ function answerOffer(o, driverId, accept) {
     setOrder(o, { driverId, driverName: d.name, status: 'assigned', offeredTo: null,
       etaMin: c.etaMin || null, etaAt: c.etaMin ? Date.now() : null });
     pushDriverOrder(driverId);
+    pulse('🧕 تاليا — الموزعة', `أسندت ${o.id} إلى ${d.name}${c.etaMin ? ` (${c.etaMin} د)` : ''}`);
     talyaSay(driverId, `تم، الطلب ${o.id} لك. بالسلامة.`);
     talyaFeed(`🟢 ${o.id}: قبله ${d.name} — أُسند.`);
   } else {
@@ -367,7 +368,23 @@ function cancelOffer(o) {
   o._offer = null;
 }
 
-// ---------- جسر لوحة العقل: دفع الأحداث (fire-and-forget) ----------
+// ---------- 🤖 نبض الوكلاء + حالة الوصلات الصادقة (لا ضوء أخضر مزيف) ----------
+const agentPulse = {};    // اسم الوكيل -> {runs, lastAt, note} — كل وكيل يوثق آخر عمل قام به
+function pulse(name, note) {
+  const a = (agentPulse[name] ||= { runs: 0, lastAt: 0, note: '' });
+  a.runs++; a.lastAt = Date.now();
+  if (note) a.note = String(note).slice(0, 90);
+}
+const linkState = { brainOkAt: 0, brainErrAt: 0, backupAt: 0 };
+const linksPublic = () => ({
+  brain: linkState.brainOkAt >= linkState.brainErrAt ? (linkState.brainOkAt ? 'ok' : 'idle') : 'err',
+  brainAt: Math.max(linkState.brainOkAt, linkState.brainErrAt) || null,
+  osrm: !OSRM_URL ? 'off' : Date.now() < osrmDownUntil ? 'down' : 'ok',
+  claude: Boolean(process.env.ANTHROPIC_API_KEY),
+  backupAt: linkState.backupAt || null,
+});
+
+// ---------- جسر لوحة العقل: دفع الأحداث (fire-and-forget مع تتبع صدق الوصلة) ----------
 function brainEvent(event, payload) {
   if (!BRAIN_WEBHOOK_URL) return;
   fetch(BRAIN_WEBHOOK_URL, {
@@ -375,7 +392,9 @@ function brainEvent(event, payload) {
     headers: { 'content-type': 'application/json', 'x-api-key': BRAIN_API_KEY },
     body: JSON.stringify({ event, at: Date.now(), ...payload }),
     signal: AbortSignal.timeout(8000),                            // لا تكديس وعود عند تعثّر الطرف الآخر
-  }).catch(() => {});
+  }).then(r => { if (r.ok) { linkState.brainOkAt = Date.now(); if (event === 'state_backup') linkState.backupAt = Date.now(); }
+    else linkState.brainErrAt = Date.now(); })
+    .catch(() => { linkState.brainErrAt = Date.now(); });
 }
 
 // ---------- 💾 ديمومة الحالة عبر غرفة التشغيل (تخزينها دائم) — تنجو من إعادة النشر ----------
@@ -383,6 +402,7 @@ function brainEvent(event, payload) {
 let backupDirty = false;
 function backupState() {
   if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
+  pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${brainMemory.context.length} معلومة`);
   brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
     context: brainMemory.context, notes: brainMemory.notes, goals: brainMemory.goals, memSeq } });
   backupDirty = false;
@@ -571,6 +591,7 @@ function autoRecover(now) {
       setOrder(o, { driverId: null, driverName: null, status: 'new', offeredTo: null });
       o._reminded = false;
       pushDriverOrder(prev);
+      pulse('🔁 المعافي — سحب وإعادة توزيع', `سحب ${o.id}: ${reason}`);
       talyaSay(prev, `سُحب الطلب ${o.id} منك وأعيد توزيعه.`);
       talyaFeed(`🔁 ${o.id}: سحبته آلياً (${reason}) — أعيد عرضه على الأقرب.`);
       startDispatch(o);
@@ -583,6 +604,7 @@ function autoRecover(now) {
 }
 function prSweep() {
   const now = Date.now();
+  pulse('👁 الراصد — التحقق والتصعيد', `${openPriorities().length} أولوية مفتوحة · ${pending.size} بالطابور`);
   try { autoRecover(now); } catch (e) { console.error('[autoRecover]', e?.message); }
   // (1) كواشف استباقية من الحالة الحية — تفتح وتعيد التسعير ديناميكياً
   if (ACTIVE.size > 0 && onlineCount() === 0)
@@ -668,6 +690,7 @@ async function etaMonitor() {
     }
     const lateBy = Math.round((Date.now() + etaMin * 60_000 - (o.createdAt + PROMISE_MIN * 60_000)) / 60_000);
     Object.assign(o, { etaMin, etaAt: Date.now(), riskLate: lateBy > 0 });   // بلا لمس updatedAt — كواشف العلوق تعتمد عليه
+    pulse('🔮 منبئ التأخير — ETA', `${o.id}: الوصول بعد ${etaMin} د${lateBy > 0 ? ` (خطر تأخر ${lateBy} د)` : ''}`);
     pushOrderDelta(o);
     if (lateBy > 0)
       prOpen('eta_risk:' + o.id, { type: 'eta_risk', score: Math.min(85, 58 + lateBy * 2),
@@ -737,6 +760,7 @@ function brainSummary() {
     teamLoad: teamLoad(), staff: STAFF,
     cells: cellDrivers.size, topCells: liveIndex().slice(0, 5),      // الفهرس الجغرافي الحي
     goal: brainMemory.goals.dailyOrders || 0, notesOpen: brainMemory.notes.length,
+    agents: agentPulse, links: linksPublic(),                        // شفافية الوكلاء والوصلات
   };
 }
 
@@ -778,6 +802,7 @@ setInterval(() => {
     if (!at || hm !== at || lastBrief[kind] === day) continue;
     lastBrief[kind] = day;
     const text = briefText(kind);
+    pulse('🌅 المُحيط — الإحاطات المجدولة', kind === 'morning' ? 'بثّ إحاطة الصباح' : 'بثّ إغلاق اليوم');
     broadcastOps({ t: 'brief', kind, text, at: Date.now() });   // الشاشة تنطقها واللوحة تعرضها
     brainEvent('brief', { kind, text });                        // وغرفة التشغيل تؤرشفها وتشعر بها
   }
@@ -1032,6 +1057,7 @@ async function handleHttp(req, res) {
       statBump('created');
       setOrder(o, {});
       if (b.auto !== false) startDispatch(o);                  // 🧕 تاليا تعرضه على الأقرب فوراً
+      pulse('📲 جسر التطبيق', `استقبل ${o.id}${ref ? ` (رقم ${ref})` : ''}${o.storeId ? ' — التقاط من متجر' : ''}`);
       talyaFeed(`📲 ${o.id}: وصل من تطبيق ديار${ref ? ` (رقم ${ref})` : ''} — أتولاه الآن.`);
       return json(200, { ok: true, order: orderPublic(o) });
     }
