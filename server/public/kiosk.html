@@ -234,21 +234,52 @@ $('#langBtn').onclick = () => { langIdx = (langIdx + 1) % LANGS.length; localSto
   $('#langBtn').textContent = '🌐 ' + LANGS[langIdx].l; };
 $('#langBtn').textContent = '🌐 ' + LANGS[langIdx].l;
 
-/* ===== النطق ===== */
+/* ===== النطق البشري: أفضل صوت متاح + جمل قصيرة بإيقاع ووقفات طبيعية ===== */
 let voices = [];
 function loadVoices() { voices = speechSynthesis.getVoices(); }
 if ('speechSynthesis' in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+function bestVoice() {                                  // أصوات Google/الطبيعية أولاً — أوضح وأقرب للبشر
+  const pref = lang();
+  const cand = voices.filter(v => (v.lang || '').toLowerCase().startsWith(pref) || (pref === 'ar' && /arabic|العربية/i.test(v.name)));
+  const score = (v) => (/google/i.test(v.name) ? 4 : 0) + (/natural|neural|premium|enhanced|online/i.test(v.name) ? 4 : 0)
+    + (v.localService === false ? 2 : 0) + ((v.lang || '').toLowerCase().startsWith(pref) ? 1 : 0);
+  return cand.sort((a, b) => score(b) - score(a))[0] || null;
+}
+// تهيئة النص للنطق: بلا رموز، النسب «بالمئة»، والفواصل تصير وقفات
+const speakClean = (t) => String(t)
+  .replace(/[🟢🟠🔴🟡⚡📺🎙⏫↩️•⚠🌅🌙👏🙂▪🏪📍🛵🔴🟠]/g, '')
+  .replace(/[·|—]/g, '، ').replace(/%/g, ' بالمئة').replace(/\s+/g, ' ').trim();
+// تقطيع لجمل ≤ 170 حرفاً — نطق مرتب بلا انقطاع منتصف النص الطويل (علة معروفة في المتصفحات)
+function sentences(t) {
+  const raw = t.match(/[^.!؟؛:]+[.!؟؛:]?/g) || [t];
+  const out = [];
+  for (const p of raw.map(x => x.trim()).filter(Boolean))
+    if (out.length && (out[out.length - 1] + ' ' + p).length <= 170) out[out.length - 1] += ' ' + p;
+    else out.push(p);
+  return out;
+}
+let speakSeq = 0;
 function speak(text, then) {
   if (!('speechSynthesis' in window) || privateMode) { then && then(); return; }
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(String(text).replace(/[🟢🟠🔴🟡⚡📺🎙⏫↩️•⚠]/g, ''));
-  u.lang = lang();
-  const v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(lang())); if (v) u.voice = v;
-  u.rate = 1.03;
-  document.body.classList.add('speaking'); speakingNow = true;
-  mouthStart();                                        // الفم يتحرك مع الكلام
-  u.onend = u.onerror = () => { speakingNow = false; mouthStop(); document.body.classList.remove('speaking'); then && then(); };
-  speechSynthesis.speak(u);
+  const my = ++speakSeq;
+  const parts = sentences(speakClean(text));
+  if (!parts.length) { then && then(); return; }
+  document.body.classList.add('speaking'); speakingNow = true; mouthStart();
+  const finish = () => { if (my !== speakSeq) return; speakingNow = false; mouthStop(); document.body.classList.remove('speaking'); then && then(); };
+  let i = 0;
+  const next = () => {
+    if (my !== speakSeq) return;                       // قوطع بـ«أوقف» أو كلام جديد
+    if (i >= parts.length) return finish();
+    const u = new SpeechSynthesisUtterance(parts[i++]);
+    u.lang = lang() === 'ar' ? 'ar' : lang() === 'he' ? 'he-IL' : 'en-US';
+    const v = bestVoice(); if (v) u.voice = v;
+    u.rate = 0.97; u.pitch = 1.03;                     // إيقاع هادئ قريب من البشر
+    u.onend = () => setTimeout(next, 150);             // وقفة قصيرة بين الجمل — ترتيب وسكينة
+    u.onerror = finish;
+    speechSynthesis.speak(u);
+  };
+  next();
 }
 /* 🙂 حياة الوجه: فم يتحرك أثناء الكلام + رمشة عين طبيعية */
 const MOUTHS = ['M80 140 Q100 150 120 140',
@@ -263,7 +294,7 @@ setInterval(() => { const g = document.getElementById('eyesG'); if (!g) return;
   g.setAttribute('transform', 'translate(0 102) scale(1 0.08) translate(0 -102)');
   setTimeout(() => g.removeAttribute('transform'), 140);
 }, 3600);
-const shutUp = () => { if ('speechSynthesis' in window) speechSynthesis.cancel(); speakingNow = false; document.body.classList.remove('speaking','thinking'); };
+const shutUp = () => { speakSeq++; if ('speechSynthesis' in window) speechSynthesis.cancel(); speakingNow = false; mouthStop(); document.body.classList.remove('speaking','thinking'); };
 let speakingNow = false;
 
 /* ===== وضع الخصوصية: تمويه اللوحات الحساسة + كتم النطق ===== */

@@ -164,6 +164,7 @@
       <button data-p="drivers">الموصلون</button>
       <button data-p="stores">🏪</button>
       <button data-p="prio">⚡<span id="prioBadge">0</span></button>
+      <button data-p="brain">🧠</button>
       <button data-p="feed">البث</button>
     </div>
 
@@ -186,7 +187,23 @@
       <div id="olist"><div class="empty">لا طلبات بعد.<br>كل طلب — من لوحتك أو من تطبيق ديار — يظهر هنا بسجل تتبع كامل: أُنشئ ← عُرض ← قُبل ← استُلم ← سُلّم، مع الوقت واسم الموصل.</div></div>
     </div>
 
+    <div class="pane" id="p-brain">
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px">🧠 عقل ديار — مستشار الشركة (حالة طلب، توزيع مهام، ماركتنج، هدف، ملاحظات…)</div>
+      <div style="display:flex;gap:6px;margin-bottom:6px">
+        <input id="brainQ" placeholder="شو حالة طلب 5802؟ · وزّع المهام على الفريق…" style="flex:1">
+        <button class="primary" id="brainGo" style="padding:8px 14px">اسأل</button>
+      </div>
+      <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px">
+        <button class="bq">الإحاطة الصباحية</button><button class="bq">وزّع المهام على الفريق</button>
+        <button class="bq">ما المشاكل الآن؟</button><button class="bq">وين وصلنا من الهدف؟</button>
+        <button class="bq">شو برنامج الماركتنج؟</button><button class="bq">الملاحظات</button>
+      </div>
+      <div id="brainA" style="font-size:13px;line-height:1.85;min-height:3em;background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px;padding:10px 12px">اسألني عن أي شيء تشغيلي أو إداري — أو استعمل الأزرار السريعة.</div>
+      <div id="brainAsOf" style="font-size:10.5px;color:var(--muted);direction:ltr;text-align:left;margin-top:4px;min-height:1.2em"></div>
+    </div>
+
     <div class="pane" id="p-prio">
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px">⚡ غرفة العمليات — الأولويات الحية والوكلاء والوصلات</div>
       <input id="opsName" placeholder="اسمك (يُسجَّل عند استلام الأولويات)" style="width:100%;margin-bottom:6px">
       <div id="linksStrip" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px"></div>
       <div id="plist"><div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div></div>
@@ -209,6 +226,7 @@
     <div class="maptools">
       <label><input type="checkbox" id="tTrails" checked> مسارات الحركة</label>
       <label><input type="checkbox" id="tCells"> خلايا التغطية</label>
+      <label><input type="checkbox" id="tRoutes" checked> مسارات كل الطلبات</label>
       <label><input type="checkbox" id="tAcc" checked> دوائر دقة GPS</label>
       <label><input type="checkbox" id="tFollow" checked> تتبع المحدد</label>
     </div>
@@ -218,22 +236,6 @@
 <dialog id="cmdDlg" style="max-width:560px;width:92vw;margin-top:8vh">
   <input id="cmdQ" placeholder="⌘K — ابحث أو نفّذ: رقم طلب، موصل، متجر، أمر…" style="width:100%;font-size:15px;padding:11px">
   <div id="cmdList" style="max-height:52vh;overflow:auto;margin-top:8px"></div>
-</dialog>
-
-<dialog id="brainDlg" style="max-width:540px;width:92vw">
-  <h3>🧠 اسأل عقل ديار</h3>
-  <div style="display:flex;gap:6px;margin:10px 0 8px">
-    <input id="brainQ" placeholder="مثال: شو حالة طلب 5802؟ · سجّل ملاحظة: … · الهدف اليومي 40 طلب" style="flex:1">
-    <button class="primary" id="brainGo" style="padding:8px 16px">اسأل</button>
-  </div>
-  <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">
-    <button class="bq">الإحاطة الصباحية</button><button class="bq">ما المشاكل الآن؟</button>
-    <button class="bq">وين وصلنا من الهدف؟</button><button class="bq">الملاحظات</button>
-    <button class="bq">مين عليه ضغط؟</button><button class="bq">كم طلبية أمس؟</button>
-  </div>
-  <div id="brainA" style="font-size:13.5px;line-height:1.85;min-height:2.5em;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px">اسألني عن أي شيء تشغيلي — أو استعمل الأزرار السريعة.</div>
-  <div id="brainAsOf" style="font-size:10.5px;color:var(--muted);direction:ltr;text-align:left;margin-top:4px;min-height:1.2em"></div>
-  <button onclick="brainDlg.close()" style="margin-top:8px;width:100%;padding:9px">إغلاق</button>
 </dialog>
 
 <dialog id="pinDlg">
@@ -296,6 +298,10 @@
       paint: { 'fill-color': '#3fbf77', 'fill-opacity': ['interpolate', ['linear'], ['get', 'n'], 1, 0.10, 3, 0.22, 6, 0.35] } });
     map.addLayer({ id: 'cells-line', type: 'line', source: 'cells',
       paint: { 'line-color': '#2b7a52', 'line-opacity': 0.6, 'line-width': 1.2 } });
+    map.addSource('routesAll', { type: 'geojson', data: fc([]) });   // مسارات كل الطلبات الجارية
+    map.addLayer({ id: 'routes-all', type: 'line', source: 'routesAll',
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': ['case', ['get', 'risk'], '#e25555', '#4da3ff'], 'line-width': 2.5, 'line-opacity': 0.55 } });
     map.addSource('route', { type: 'geojson', data: fc([]) });
     map.addLayer({ id: 'route-casing', type: 'line', source: 'route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
@@ -364,6 +370,14 @@
         cellF.push({ type: 'Feature', properties: { n }, geometry: { type: 'Polygon', coordinates: [hexPolygon(k)] } });
     }
     map.getSource('cells') && map.getSource('cells').setData(fc(cellF));
+    const rAll = [];
+    if ($('tRoutes').checked)                                   // مسارات كل الطلبات الجارية دفعة واحدة
+      for (const o of ordersM.values()) {
+        if (!['assigned', 'picked'].includes(o.status) || o.id === selectedOrder) continue;
+        const rr = routeCache.get(o.id);
+        if (rr?.geometry) rAll.push({ type: 'Feature', properties: { risk: !!o.riskLate }, geometry: rr.geometry });
+      }
+    map.getSource('routesAll') && map.getSource('routesAll').setData(fc(rAll));
     const r = selectedOrder && routeCache.get(selectedOrder);
     map.getSource('route').setData(fc(r?.geometry ? [ { type:'Feature', properties:{}, geometry: r.geometry } ] : []));
   }
@@ -694,7 +708,16 @@
     document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
     document.querySelectorAll('.pane').forEach(p => p.classList.toggle('show', p.id === 'p-' + b.dataset.p));
   });
-  ['tTrails','tAcc','tCells'].forEach(id => $(id).addEventListener('change', redrawLayers));
+  ['tTrails','tAcc','tCells','tRoutes'].forEach(id => $(id).addEventListener('change', redrawLayers));
+  // تحديث مسارات كل الطلبات الجارية دورياً (حتى 8 لكل دورة — لطف مع OSRM، والباقي بالدورة التالية)
+  async function refreshAllRoutes() {
+    if (!map || !$('tRoutes').checked) return;
+    const act = [...ordersM.values()].filter(o => o.driverId && ['assigned', 'picked'].includes(o.status)).slice(0, 8);
+    for (const o of act) { try { await computeRoute(o); } catch {} }
+    redrawLayers();
+  }
+  setInterval(refreshAllRoutes, 20_000);
+  setTimeout(refreshAllRoutes, 4000);
 
   // ================= WebSocket =================
   function connect() {
@@ -792,7 +815,8 @@
   setInterval(renderPrio, 30_000);   // تحديث الأعمار
 
   // ================= 🧠 اسأل عقل ديار من اللوحة + مؤشرات اليوم =================
-  $('brainAskBtn').onclick = () => { brainDlg.showModal(); $('brainQ').focus(); };
+  const openBrainTab = () => { document.querySelector('.tabs button[data-p="brain"]').click(); $('brainQ').focus(); };
+  $('brainAskBtn').onclick = openBrainTab;
   async function askBrain(q) {
     if (!q) return;
     $('brainA').textContent = '… أفحص البيانات الحية';
@@ -878,8 +902,8 @@
   // ================= ⌘K لوحة الأوامر: بحث ونفاذ فوري لكل شيء =================
   const cmdActions = [
     ['＋ طلب جديد', () => { cmdDlg.close(); $('newOrderBtn').click(); }],
-    ['🧠 اسأل عقل ديار', () => { cmdDlg.close(); brainDlg.showModal(); $('brainQ').focus(); }],
-    ['🌅 الإحاطة الصباحية', () => { cmdDlg.close(); brainDlg.showModal(); askBrain('الإحاطة الصباحية'); }],
+    ['🧠 اسأل عقل ديار', () => { cmdDlg.close(); openBrainTab(); }],
+    ['🌅 الإحاطة الصباحية', () => { cmdDlg.close(); openBrainTab(); askBrain('الإحاطة الصباحية'); }],
     ['🏪 إضافة متجر', () => { cmdDlg.close(); $('addStoreBtn').click(); }],
     ['⚡ الأولويات', () => { cmdDlg.close(); document.querySelector('.tabs button[data-p="prio"]').click(); }],
     ['📺 فتح شاشة عقل ديار', () => { cmdDlg.close(); window.open('/kiosk.html', '_blank'); }],
