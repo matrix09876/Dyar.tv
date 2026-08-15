@@ -20,6 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
+const BUILD_TAG = 'agents-branch-1';    // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -1280,7 +1281,7 @@ async function handleHttp(req, res) {
 
   if (req.method === 'OPTIONS') return json(204, {});
   if (url.pathname === '/api/health')
-    return json(200, { ok: true, drivers: drivers.size, online: onlineCount(),
+    return json(200, { ok: true, v: BUILD_TAG, upMin: Math.round(process.uptime() / 60), drivers: drivers.size, online: onlineCount(),
       // تشخيص الرموز بلا كشف قيمها: أي متغير بيئة هو الفعّال للوحة/الأجهزة
       pins: { opsPinSet: Boolean(process.env.OPS_PIN), driverPinSet: Boolean(process.env.DYAR_PIN),
               panelUses: process.env.OPS_PIN ? 'OPS_PIN' : process.env.DYAR_PIN ? 'DYAR_PIN' : 'الافتراضي 1234' } });
