@@ -1164,6 +1164,7 @@ async function askClaude(q, s, staff) {
 
 // ---------- HTTP: ملفات + REST للوحة العقل ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' };
+const ttsCache = new Map();               // نص -> صوت تاليا mp3 — العبارات المتكررة لا تُولَّد مرتين
 const readBody = (req) => new Promise((res) => {
   let b = '', done = false; const fin = (v) => { if (!done) { done = true; res(v); } };
   req.on('data', c => { b += c; if (b.length > 1e6) { req.destroy(); fin({}); } });   // لا يعلّق الطلب عند تجاوز الحجم
@@ -1202,6 +1203,32 @@ async function handleHttp(req, res) {
     }
     return json(200, { answer: brainAnswer(q, s, b.staff), source: 'local', asOf: Date.now(), summary: s });
   }
+  // 🎙 صوت تاليا الحقيقي (ElevenLabs عبر غرفة التشغيل) — كاش محلي يحمي الرصيد والزمن
+  if (url.pathname === '/api/brain/tts' && req.method === 'POST') {
+    const b = await readBody(req);
+    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 600);
+    if (!text) return json(400, { error: 'text required' });
+    const hit = ttsCache.get(text);
+    if (hit) { res.writeHead(200, { 'content-type': 'audio/mpeg', 'x-tts-cache': 'hit' }); return res.end(hit); }
+    if (!BRAIN_PANEL_URL || !process.env.BRAIN_API_KEY) return json(503, { error: 'no_bridge' });
+    try {
+      const r = await fetch(BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect/tts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': BRAIN_API_KEY },
+        body: JSON.stringify({ text }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!r.ok) return json(503, { error: 'tts_' + r.status });
+      const buf = Buffer.from(await r.arrayBuffer());
+      ttsCache.set(text, buf);
+      if (ttsCache.size > 80) ttsCache.delete(ttsCache.keys().next().value);
+      pulse('🎙 صوت تاليا — ElevenLabs', `نطق ${text.length} حرفاً`);
+      res.writeHead(200, { 'content-type': 'audio/mpeg' });
+      return res.end(buf);
+    } catch { return json(503, { error: 'tts_unreachable' }); }
+  }
+
   // 📳 تنبيهات الهاتف: مفتاح الاشتراك + تسجيل جهاز + فحص — وضع المشغّل الواحد
   if (url.pathname === '/api/push/key' && req.method === 'GET') {
     if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
