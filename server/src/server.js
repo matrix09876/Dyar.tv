@@ -894,6 +894,7 @@ function brainSummary() {
     cells: cellDrivers.size, topCells: liveIndex().slice(0, 5),      // الفهرس الجغرافي الحي
     goal: brainMemory.goals.dailyOrders || 0, notesOpen: brainMemory.notes.length,
     agents: agentPulse, links: linksPublic(),                        // شفافية الوكلاء والوصلات
+    wx: wx.at ? { t: wx.t, tmax: wx.tmax, rain: wx.rain, wind: wx.wind } : null,
   };
 }
 
@@ -911,6 +912,25 @@ function brainPriorities(s) {
 const fmtDayAr = (off = 0) => new Intl.DateTimeFormat('ar', { weekday: 'long', day: 'numeric', month: 'long' })
   .format(new Date(Date.now() - off * 86400_000));
 
+// ---------- 🌦 الطقس (Open-Meteo — مجاني بلا مفتاح): جلب مسبق كل 30 دقيقة، قراءة متزامنة ----------
+let wx = { at: 0, t: null, rain: 0, wind: 0, tmax: null };
+async function fetchWeather() {
+  try {
+    const r = await fetch('https://api.open-meteo.com/v1/forecast?latitude=32.938&longitude=35.271'
+      + '&current=temperature_2m,precipitation,wind_speed_10m&daily=precipitation_probability_max,temperature_2m_max&timezone=auto&forecast_days=1',
+      { signal: AbortSignal.timeout(6000) });
+    if (!r.ok) return;
+    const j = await r.json();
+    wx = { at: Date.now(), t: Math.round(j.current?.temperature_2m), wind: Math.round(j.current?.wind_speed_10m || 0),
+      rain: j.daily?.precipitation_probability_max?.[0] ?? 0, tmax: Math.round(j.daily?.temperature_2m_max?.[0]) };
+  } catch { /* أفضل-جهد — الشاشة تعمل بلا طقس */ }
+}
+setInterval(fetchWeather, 30 * 60_000).unref?.();
+setTimeout(fetchWeather, 3000);
+const wxLine = () => wx.at ? `الطقس: ${wx.t}° الآن (العظمى ${wx.tmax}°)` +
+  (wx.rain >= 30 ? `، واحتمال مطر ${wx.rain}% — جهّزوا أغطية الصناديق` : '') +
+  (wx.wind >= 30 ? `، ورياح ${wx.wind} كم/س` : '') : '';
+
 // 🌅 الإحاطات المجدولة (نمط Founder OS): افتتاح الصباح وإغلاق المساء — تُبث تلقائياً للشاشة واللوحة وغرفة التشغيل
 function briefText(kind) {
   const s = brainSummary(), y = s.yesterday, d = s.today, g = brainMemory.goals.dailyOrders;
@@ -923,7 +943,8 @@ function briefText(kind) {
   }
   return `🌅 صباح الخير! إحاطة ديار ليوم ${fmtDayAr(0)}: أمس ${y.created} طلبية (${y.delivered} أُنجز، ${y.cancelled} أُلغي` +
     `${y.escalated ? `، ${y.escalated} تصعيد` : ''}). ` + (g ? `هدف اليوم: ${g} طلبية. ` : '') +
-    `الآن ${s.online} موصل متصل و${s.active} طلب نشط. الأولويات: ` + brainPriorities(s).slice(0, 3).join(' ثم ') +
+    `الآن ${s.online} موصل متصل و${s.active} طلب نشط. ` + (wxLine() ? wxLine() + '. ' : '') +
+    `الأولويات: ` + brainPriorities(s).slice(0, 3).join(' ثم ') +
     (brainMemory.notes.length ? ` — وعندكم ${brainMemory.notes.length} ملاحظة مفتوحة، قولوا «يا ديار الملاحظات».` : '');
 }
 const BRIEF_MORNING = process.env.BRIEF_MORNING ?? '08:30';
@@ -992,6 +1013,22 @@ function brainAnswer(q, s, staff) {
     if (!g) return 'لا هدف يومي مضبوط. قولوا: «الهدف اليومي 40 طلب» وسأتابعه.';
     const pct = Math.round((d.delivered / g) * 100);
     return `الهدف اليومي ${g} طلبية — أنجزنا ${d.delivered} (${pct}%)${pct >= 100 ? ' 👏 تحقق الهدف!' : d.created > d.delivered ? `، و${s.active} قيد التنفيذ الآن.` : '.'}`;
+  }
+  if (has('الطقس', 'الجو', 'مطر', 'شوب', 'حر اليوم', 'برد اليوم'))
+    return wx.at ? wxLine() + (wx.rain >= 30 ? ' — نبّهوا الموصلين وزيدوا وقت الوعد قليلاً.' : ' — يوم مناسب للتوصيل.')
+                 : 'لم أستطع جلب الطقس الآن — سأحاول ثانية خلال دقائق.';
+  if (has('شو بتقدر', 'ماذا تستطيع', 'قدراتك', 'شو بتعرف تعمل', 'وش تقدر'))
+    return 'أنا عقل ديار — أقدر: أتتبع أي طلب برقمه، أوزّع مهام اليوم على الفريق، أعطي برنامج الماركتنج والاستراتيجية، ' +
+      'أحفظ معلومات وملاحظات للأبد («احفظ معلومة/سجّل ملاحظة»)، أتابع الهدف اليومي، أبث إحاطة الصباح والمساء وأرسل العاجل لهاتف المدير، ' +
+      'أعرف الطقس، أحسب («احسب 15 ضرب 4»)، أدير الأولويات بالتصعيد حتى الإغلاق — وكل أرقامي من النظام الحي، لا أختلق شيئاً.';
+  if ((mm = t.match(/احسب\s+(.{1,60})/) ) || (mm = t.match(/كم يساوي\s+(.{1,60})/))) {
+    const expr = mm[1].replace(/زائد|\+و/g, '+').replace(/ناقص/g, '-').replace(/ضرب|في/g, '*').replace(/قسمه|تقسيم|على/g, '/')
+      .replace(/[×x]/g, '*').replace(/÷/g, '/').replace(/[^0-9+\-*/().%\s]/g, '').trim();
+    if (/^[0-9+\-*/().%\s]{1,60}$/.test(expr) && /\d/.test(expr)) {
+      try { const v = Function('"use strict";return (' + expr + ')')();
+        if (Number.isFinite(v)) return `${expr} = ${Math.round(v * 1000) / 1000}`; } catch {}
+    }
+    return 'أعد صياغة الحساب — مثال: «احسب 15 ضرب 4» أو «احسب (120+80) على 2».';
   }
   if (has('احاطه', 'الاحاطه', 'ملخص الصباح', 'افتتاح اليوم')) return briefText('morning');
   if (has('اغلاق اليوم', 'ملخص المساء', 'تقرير اليوم')) return briefText('evening');

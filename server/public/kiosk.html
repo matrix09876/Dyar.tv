@@ -373,7 +373,8 @@ function renderSummary(s) {
   setKpi('#kActive', s.active, `${s.waiting} في الانتظار`, s.waiting ? 'warn' : '');
   setKpi('#kOnline', s.online, `من ${s.devices} جهاز${s.cells ? ' · ' + s.cells + ' خلية' : ''}`, s.online ? 'good' : 'bad');
   applyStaff(s.staff);
-  $('#aiBadge').textContent = s.ai ? '⚡ الاستدلال: عقل كلاودي (Claude) + بوابة أدوات' : '⚙ الاستدلال المحلي الفوري';
+  $('#aiBadge').textContent = (s.wx ? `🌦 ${s.wx.t}°${s.wx.rain >= 30 ? ` · مطر ${s.wx.rain}%` : ''} — ` : '')
+    + (s.ai ? '⚡ عقل كلاودي + بوابة أدوات' : '⚙ الاستدلال المحلي الفوري');
   if (s.prOpen) syncPriorities(s.prOpen, true);
 }
 
@@ -445,9 +446,75 @@ function connectWS() {
     if (m.t === 'snapshot') { applyStaff(m.staff); syncPriorities(m.priorities || [], true); }
     else if (m.t === 'priority') onPriority(m.p);
     else if (m.t === 'brief') { showAnswer(m.text, m.kind === 'morning' ? '🌅 الإحاطة الصباحية' : '🌙 إغلاق اليوم'); if (!privateMode) speak(m.text); }
+    else if (m.t === 'talya' && !privateMode) tickerAdd('🧕 ' + m.text);
     else if (m.t === 'sos' && !privateMode) speak(`طوارئ! إشارة استغاثة من ${m.name}. تواصلوا معه فوراً.`);
   };
 }
+
+/* ===== 🔔 جرس الإصغاء + ⏲ المؤقتات + 🔳 QR + 📟 شريط الأحداث (من دراسة JARVIS) ===== */
+function chime(f = 880, ms = 90) { try { const ctx = chime._c ||= new AudioContext();
+  const o = ctx.createOscillator(), g = ctx.createGain();
+  o.frequency.value = f; o.connect(g); g.connect(ctx.destination);
+  g.gain.setValueAtTime(0.12, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + ms / 1000);
+  o.start(); o.stop(ctx.currentTime + ms / 1000); } catch {} }
+const timers = new Map(); let timerSeq = 0;
+const timerBar = document.createElement('div');
+timerBar.style.cssText = 'position:fixed;top:1.5vh;left:50%;transform:translateX(-50%);display:flex;gap:8px;z-index:40';
+document.body.appendChild(timerBar);
+function renderTimers() {
+  timerBar.innerHTML = '';
+  for (const [id, tm] of timers) {
+    const left = Math.max(0, Math.round((tm.endAt - Date.now()) / 1000));
+    const chip = document.createElement('div');
+    chip.style.cssText = 'background:#37280f;color:#f0c069;border:1px solid #6b511f;border-radius:99px;padding:.6vh 1.2vw;font-size:1.8vh;font-weight:700;cursor:pointer';
+    chip.textContent = `⏲ ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
+    chip.title = 'اضغط للإلغاء'; chip.onclick = () => { clearTimeout(tm.h); timers.delete(id); renderTimers(); };
+    timerBar.appendChild(chip);
+  }
+}
+setInterval(() => timers.size && renderTimers(), 1000);
+function startTimer(sec) {
+  const id = ++timerSeq;
+  timers.set(id, { endAt: Date.now() + sec * 1000, h: setTimeout(() => {
+    timers.delete(id); renderTimers(); chime(660, 150); setTimeout(() => chime(880, 250), 220);
+    const g = '⏲ انتهى المؤقت!'; showAnswer(g); speak(g);
+  }, sec * 1000) });
+  renderTimers();
+}
+function tryTimerCmd(t) {
+  const m = /موقت|مؤقت|منبه/.test(t) && t.match(/(\d+)\s*(ثانيه|ثواني|دقيقه|دقايق|دقائق)/);
+  if (!m) return false;
+  const n = +m[1], sec = /ثان/.test(m[2]) ? n : n * 60;
+  if (sec < 5 || sec > 7200) return false;
+  const g = `تم — مؤقت ${n} ${/ثان/.test(m[2]) ? 'ثانية' : 'دقيقة'} شغّال، وسأنبهك بصوتي.`;
+  startTimer(sec); showAnswer(g); speak(g, maybeRestartListening);
+  return true;
+}
+function tryQrCmd(t) {
+  if (!/رمز|باركود|qr|كيو ار/.test(t)) return false;
+  const m = t.match(/(\d{3,})/);
+  if (!m) return false;
+  const url = location.origin + '/track.html?ref=' + m[1];
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.85);display:grid;place-items:center;z-index:60;cursor:pointer';
+  ov.innerHTML = `<div style="background:#fff;padding:24px;border-radius:16px;text-align:center"><div id="qrbox"></div><div style="color:#111;margin-top:10px;font-weight:700">تتبع الطلب ${esc(m[1])} — امسح بالهاتف</div></div>`;
+  ov.onclick = () => ov.remove();
+  document.body.appendChild(ov);
+  const sc = document.createElement('script'); sc.src = '/vendor/qrcode.js';
+  sc.onload = () => { try { new QRCode(ov.querySelector('#qrbox'), { text: url, width: 220, height: 220 }); } catch {} };
+  sc.onerror = () => ov.querySelector('#qrbox').textContent = url;
+  document.body.appendChild(sc);
+  const g = `أعرض رمز تتبع الطلب ${m[1]} — امسحه بكاميرا الهاتف.`;
+  showAnswer(g); speak(g, maybeRestartListening);
+  setTimeout(() => ov.remove(), 60_000);
+  return true;
+}
+// 📟 شريط أحداث حي أسفل الشاشة — نبض تاليا والوكلاء لحظة بلحظة
+const ticker = document.createElement('div');
+ticker.style.cssText = 'position:fixed;bottom:9vh;right:0;left:0;text-align:center;color:#98a1b4;font-size:1.7vh;padding:0 3vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85';
+document.body.appendChild(ticker);
+function tickerAdd(text) { ticker.textContent = text; clearTimeout(tickerAdd._t); tickerAdd._t = setTimeout(() => ticker.textContent = '', 25_000); }
 
 /* ===== فهم الجملة ===== */
 async function handleUtterance(raw) {
@@ -455,6 +522,8 @@ async function handleUtterance(raw) {
   if (!q) return;
   const t = norm(q);
   if (/^(اوقف|توقف|اسكت|سكوت|قف|stop|שקט)/.test(t)) { shutUp(); $('#orbState').textContent = 'توقفت.'; return; }
+  if (tryTimerCmd(t)) return;                              // ⏲ «مؤقت 10 دقائق»
+  if (tryQrCmd(t)) return;                                 // 🔳 «اعرض رمز الطلب 5802»
   if (/استلمت|تم الاستلام/.test(t)) {                       // تأكيد صوتي لأول أولوية غير مستلمة
     const first = [...prs.values()].filter(p => !p.ackAt).sort((a, b) => b.score - a.score)[0];
     if (!first) { const g = 'لا أولويات بانتظار الاستلام.'; showAnswer(g); speak(g, maybeRestartListening); return; }
@@ -511,6 +580,7 @@ function startListening(oneShot) {
   rec.lang = lang() === 'ar' ? 'ar' : lang() === 'he' ? 'he-IL' : 'en-US';
   rec.interimResults = false; rec.maxAlternatives = 1;
   listening = true;
+  if (oneShot) chime(880, 90);                             // 🔔 جرس إصغاء خفيف
   document.body.classList.add('listening');
   $('#orbState').textContent = oneShot ? '🟢 أصغي إليك… تكلم الآن' : '👂 «يا ديار» — أنا منتبه';
   rec._oneShot = !!oneShot;
