@@ -675,6 +675,7 @@
       else if (m.t === 'text') feedAdd('💬 ' + m.from, m.text);
       else if (m.t === 'announce') feedAdd('📢 ' + m.from, m.text);
       else if (m.t === 'talya') feedAdd('🧕 تاليا', m.text);
+      else if (m.t === 'brief') feedAdd(m.kind === 'morning' ? '🌅 الإحاطة الصباحية' : '🌙 إغلاق اليوم', m.text);
       else if (m.t === 'sos') {
         const d = drivers.get(m.id); if (d) d.sos = true;
         $('sosText').textContent = '🚨 طوارئ — ' + m.name +

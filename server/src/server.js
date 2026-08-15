@@ -136,8 +136,30 @@ function setOrder(o, patch) {
 }
 
 // ---------- إحصاء يومي لعقل ديار (اليوم/أمس) — لا يتجاوز 8 أيام ----------
+const TZ_OFF = Number(process.env.BRAIN_TZ_OFFSET ?? 3);         // توقيت المكتب (فلسطين صيفاً +3)
 const dailyStats = new Map();             // 'YYYY-MM-DD' -> {created, delivered, cancelled, escalated, sos}
-const dateKey = (off = 0) => new Date(Date.now() - off * 86400_000).toISOString().slice(0, 10);
+const dateKey = (off = 0) => new Date(Date.now() + TZ_OFF * 3600_000 - off * 86400_000).toISOString().slice(0, 10);
+const localHM = () => { const d = new Date(Date.now() + TZ_OFF * 3600_000);
+  return String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0'); };
+
+// ---------- 🧠 ذاكرة العقل الدائمة: طبقة السياق + الملاحظات + الأهداف (نمط Founder OS) ----------
+// معرفة الشركة يقرؤها العقل قبل كل إجابة، وملاحظات المكتب «دماغ ثانٍ»، وهدف يومي تُقاس ضده الأرقام.
+const brainMemory = {
+  context: [],   // [{n, text, by, at}] — معلومات ثابتة: تسعير، ساعات، سياسات، مناطق
+  notes: [],     // [{n, text, by, at}] — ملاحظات/مهام المكتب الصوتية
+  goals: { dailyOrders: Number(process.env.DAILY_GOAL || 0) },
+};
+let memSeq = 0;
+function memAdd(kind, text, by) {
+  const arr = brainMemory[kind];
+  const item = { n: ++memSeq, text: String(text).slice(0, 200), by: by || null, at: Date.now() };
+  arr.push(item);
+  if (arr.length > 200) arr.shift();
+  backupDirty = true;
+  return item;
+}
+const memRemove = (kind, n) => { const arr = brainMemory[kind], i = arr.findIndex(x => x.n === +n);
+  if (i === -1) return null; backupDirty = true; return arr.splice(i, 1)[0]; };
 function statBump(kind, off = 0) {
   const k = dateKey(off);
   const s = dailyStats.get(k) || { created: 0, delivered: 0, cancelled: 0, escalated: 0, sos: 0 };
@@ -361,7 +383,8 @@ function brainEvent(event, payload) {
 let backupDirty = false;
 function backupState() {
   if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
-  brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq } });
+  brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
+    context: brainMemory.context, notes: brainMemory.notes, goals: brainMemory.goals, memSeq } });
   backupDirty = false;
 }
 setInterval(() => { if (backupDirty) backupState(); }, 60_000).unref?.();
@@ -380,7 +403,11 @@ async function restoreState() {
     }
     if (Array.isArray(b.dailyStats))
       for (const [k, v] of b.dailyStats) if (!dailyStats.has(k) && v && typeof v === 'object') dailyStats.set(k, v);
-    console.log(`[💾] استُعيدت الحالة من غرفة التشغيل: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء`);
+    if (!brainMemory.context.length && Array.isArray(b.context)) brainMemory.context = b.context.slice(0, 200);
+    if (!brainMemory.notes.length && Array.isArray(b.notes)) brainMemory.notes = b.notes.slice(0, 200);
+    if (b.goals?.dailyOrders > 0 && !brainMemory.goals.dailyOrders) brainMemory.goals.dailyOrders = +b.goals.dailyOrders;
+    memSeq = Math.max(memSeq, +b.memSeq || 0);
+    console.log(`[💾] استُعيدت الحالة: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة`);
   } catch { /* أفضل-جهد — يعمل بلا استعادة */ }
 }
 
@@ -709,6 +736,7 @@ function brainSummary() {
     prOpen: openPriorities().slice(0, 15), prCounts: openCounts(),
     teamLoad: teamLoad(), staff: STAFF,
     cells: cellDrivers.size, topCells: liveIndex().slice(0, 5),      // الفهرس الجغرافي الحي
+    goal: brainMemory.goals.dailyOrders || 0, notesOpen: brainMemory.notes.length,
   };
 }
 
@@ -726,12 +754,76 @@ function brainPriorities(s) {
 const fmtDayAr = (off = 0) => new Intl.DateTimeFormat('ar', { weekday: 'long', day: 'numeric', month: 'long' })
   .format(new Date(Date.now() - off * 86400_000));
 
+// 🌅 الإحاطات المجدولة (نمط Founder OS): افتتاح الصباح وإغلاق المساء — تُبث تلقائياً للشاشة واللوحة وغرفة التشغيل
+function briefText(kind) {
+  const s = brainSummary(), y = s.yesterday, d = s.today, g = brainMemory.goals.dailyOrders;
+  if (kind === 'evening') {
+    const pct = g ? Math.round((d.delivered / g) * 100) : null;
+    return `🌙 إغلاق يوم ${fmtDayAr(0)}: استقبلنا ${d.created} طلبية، أُنجز ${d.delivered}` +
+      `${pct != null ? ` من هدف ${g} (${pct}%)${pct >= 100 ? ' 👏' : ''}` : ''}، أُلغي ${d.cancelled}` +
+      `${d.escalated ? `، و${d.escalated} تصعيد` : ''}. ` +
+      (s.prOpen.length ? `${s.prOpen.length} أولوية ما زالت مفتوحة — لا تُغلق الوردية قبل تسليمها لمن يتابعها.` : 'كل الأولويات مغلقة — يوم نظيف.');
+  }
+  return `🌅 صباح الخير! إحاطة ديار ليوم ${fmtDayAr(0)}: أمس ${y.created} طلبية (${y.delivered} أُنجز، ${y.cancelled} أُلغي` +
+    `${y.escalated ? `، ${y.escalated} تصعيد` : ''}). ` + (g ? `هدف اليوم: ${g} طلبية. ` : '') +
+    `الآن ${s.online} موصل متصل و${s.active} طلب نشط. الأولويات: ` + brainPriorities(s).slice(0, 3).join(' ثم ') +
+    (brainMemory.notes.length ? ` — وعندكم ${brainMemory.notes.length} ملاحظة مفتوحة، قولوا «يا ديار الملاحظات».` : '');
+}
+const BRIEF_MORNING = process.env.BRIEF_MORNING ?? '08:30';
+const BRIEF_EVENING = process.env.BRIEF_EVENING ?? '22:30';
+const lastBrief = { morning: '', evening: '' };
+setInterval(() => {
+  const hm = localHM(), day = dateKey(0);
+  for (const [kind, at] of [['morning', BRIEF_MORNING], ['evening', BRIEF_EVENING]]) {
+    if (!at || hm !== at || lastBrief[kind] === day) continue;
+    lastBrief[kind] = day;
+    const text = briefText(kind);
+    broadcastOps({ t: 'brief', kind, text, at: Date.now() });   // الشاشة تنطقها واللوحة تعرضها
+    brainEvent('brief', { kind, text });                        // وغرفة التشغيل تؤرشفها وتشعر بها
+  }
+}, 30_000).unref?.();
+
 // إجابة محلية فورية (بلا إنترنت/مفتاح) — تفهم أسئلة المكتب المتوقعة بالكلمات المفتاحية
 function brainAnswer(q, s, staff) {
   const t = String(q || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
   const has = (...ws) => ws.some(w => t.includes(w));
   const y = s.yesterday, d = s.today;
   const fmtPr = (x, i) => `${i + 1}) ${x.severity} ${x.title}${x.recommendedAction ? ` — ${x.recommendedAction}` : ''}`;
+  // 🧠 الذاكرة: حفظ/استرجاع معلومات وملاحظات + الهدف اليومي (تنجو من إعادة التشغيل عبر النسخ الاحتياطي)
+  const rawQ = String(q || '');
+  let mm;
+  if ((mm = rawQ.match(/(?:احفظ|أحفظ|سجل|سجّل)\s*(?:معلومة|معلومه)\s*[:：]?\s*(.{3,})/))) {
+    const it = memAdd('context', mm[1], staff);
+    return `حفظت المعلومة رقم ${it.n} في معرفة الشركة — سأعتمدها في إجاباتي: «${it.text}».`;
+  }
+  if ((mm = rawQ.match(/(?:سجل|سجّل)\s*(?:ملاحظة|ملاحظه|مهمة|مهمه)?\s*[:：]\s*(.{3,})/))) {
+    const it = memAdd('notes', mm[1], staff);
+    return `سجلت الملاحظة رقم ${it.n}${staff ? ' باسم ' + staff : ''}. عندكم الآن ${brainMemory.notes.length} ملاحظة مفتوحة.`;
+  }
+  if ((mm = t.match(/(?:انجزت|أنجزت|امسح|احذف)\s*(?:الملاحظه|ملاحظه)?\s*(?:رقم)?\s*(\d+)/))) {
+    const it = memRemove('notes', mm[1]);
+    return it ? `تم — أُغلقت الملاحظة ${mm[1]}: «${it.text}». بقي ${brainMemory.notes.length}.` : `لا توجد ملاحظة برقم ${mm[1]}.`;
+  }
+  if (has('الملاحظات', 'ملاحظاتي', 'شو الملاحظات', 'المهام المسجله'))
+    return brainMemory.notes.length
+      ? `عندكم ${brainMemory.notes.length} ملاحظة: ` + brainMemory.notes.slice(-6).map(x => `(${x.n}) ${x.text}${x.by ? ' — ' + x.by : ''}`).join(' · ') + '. لإغلاق واحدة: «أنجزت الملاحظة N».'
+      : 'لا ملاحظات مفتوحة. قولوا: «سجّل ملاحظة: …» وسأحفظها.';
+  if (has('معلومات الشركه', 'شو تعرف عن الشركه', 'المعرفه المحفوظه'))
+    return brainMemory.context.length
+      ? 'معرفة الشركة المحفوظة: ' + brainMemory.context.slice(-8).map(x => `(${x.n}) ${x.text}`).join(' · ')
+      : 'لا معلومات محفوظة بعد. قولوا: «احفظ معلومة: التوصيل داخل البعنة 15 شيكل» مثلاً.';
+  if ((mm = t.match(/الهدف\s*(?:اليومي)?\s*(\d{1,4})\s*طلب/))) {
+    brainMemory.goals.dailyOrders = +mm[1]; backupDirty = true;
+    return `تم — هدف اليوم ${mm[1]} طلبية. سأقيس التقدم ضده وأذكره في الإحاطات.`;
+  }
+  if (has('الهدف', 'هدف اليوم', 'وين وصلنا من الهدف')) {
+    const g = brainMemory.goals.dailyOrders;
+    if (!g) return 'لا هدف يومي مضبوط. قولوا: «الهدف اليومي 40 طلب» وسأتابعه.';
+    const pct = Math.round((d.delivered / g) * 100);
+    return `الهدف اليومي ${g} طلبية — أنجزنا ${d.delivered} (${pct}%)${pct >= 100 ? ' 👏 تحقق الهدف!' : d.created > d.delivered ? `، و${s.active} قيد التنفيذ الآن.` : '.'}`;
+  }
+  if (has('احاطه', 'الاحاطه', 'ملخص الصباح', 'افتتاح اليوم')) return briefText('morning');
+  if (has('اغلاق اليوم', 'ملخص المساء', 'تقرير اليوم')) return briefText('evening');
   // 🔎 سؤال عن طلب محدد بالرقم: «شو حالة طلب 5802؟» — بحث بالمرجع (رقم التطبيق) أو المعرّف الداخلي
   const mRef = t.match(/(?:طلب|طلبيه|اوردر|order)[^\d]{0,6}(\d{3,})/) || (has('حاله', 'وين', 'مين اخذ') ? t.match(/(\d{4,})/) : null);
   if (mRef) {
@@ -811,7 +903,10 @@ async function askClaude(q, s, staff) {
     'خاطب المتحدث بلقبه إن ذُكر. أنت طبقة قيادة: تقترح ولا تنفّذ — التنفيذ يمر عبر اللوحة المحمية.';
   const messages = [{ role: 'user', content:
     `لمحة سريعة (استعمل الأدوات للتفاصيل): اليوم ${fmtDayAr(0)} — ${s.active} طلب نشط، ${s.online} موصل متصل، ` +
-    `${(s.prOpen || []).length} أولوية مفتوحة.\n` + (staff ? `المتحدث: ${String(staff).slice(0, 60)}\n` : '') + `السؤال: ${q}` }];
+    `${(s.prOpen || []).length} أولوية مفتوحة${s.goal ? `، هدف اليوم ${s.goal} طلبية (أُنجز ${s.today.delivered})` : ''}.\n` +
+    (brainMemory.context.length ? `📌 معرفة الشركة المحفوظة (اعتمدها دائماً): ${brainMemory.context.slice(-15).map(x => x.text).join(' | ')}\n` : '') +
+    (brainMemory.notes.length ? `🗒 ملاحظات المكتب المفتوحة: ${brainMemory.notes.slice(-8).map(x => `(${x.n}) ${x.text}`).join(' | ')}\n` : '') +
+    (staff ? `المتحدث: ${String(staff).slice(0, 60)}\n` : '') + `السؤال: ${q}` }];
   const base = { model: process.env.BRAIN_MODEL || 'claude-opus-5', max_tokens: 1200,
     thinking: { type: 'adaptive' }, system, tools: execToolDefs() };
   let j = await claudeCall({ ...base, messages });

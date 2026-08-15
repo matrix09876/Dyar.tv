@@ -263,7 +263,10 @@ function setKpi(id, v, sub, cls) {
 }
 function renderSummary(s) {
   setKpi('#kToday',  s.today.created,   `أُلغي ${s.today.cancelled}`);
-  setKpi('#kDone',   s.today.delivered, s.yesterday.delivered ? `أمس ${s.yesterday.delivered}` : '');
+  setKpi('#kDone',   s.today.delivered,
+    s.goal ? `الهدف ${s.goal} · ${Math.min(999, Math.round(s.today.delivered / s.goal * 100))}%`
+           : (s.yesterday.delivered ? `أمس ${s.yesterday.delivered}` : ''),
+    s.goal && s.today.delivered >= s.goal ? 'good' : 'good');
   setKpi('#kYest',   s.yesterday.created, `أُنجز ${s.yesterday.delivered}`);
   setKpi('#kActive', s.active, `${s.waiting} في الانتظار`, s.waiting ? 'warn' : '');
   setKpi('#kOnline', s.online, `من ${s.devices} جهاز${s.cells ? ' · ' + s.cells + ' خلية' : ''}`, s.online ? 'good' : 'bad');
@@ -339,6 +342,7 @@ function connectWS() {
     let m; try { m = JSON.parse(ev.data); } catch { return; }
     if (m.t === 'snapshot') { applyStaff(m.staff); syncPriorities(m.priorities || [], true); }
     else if (m.t === 'priority') onPriority(m.p);
+    else if (m.t === 'brief') { showAnswer(m.text, m.kind === 'morning' ? '🌅 الإحاطة الصباحية' : '🌙 إغلاق اليوم'); if (!privateMode) speak(m.text); }
     else if (m.t === 'sos' && !privateMode) speak(`طوارئ! إشارة استغاثة من ${m.name}. تواصلوا معه فوراً.`);
   };
 }
