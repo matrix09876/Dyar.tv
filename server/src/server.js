@@ -46,7 +46,15 @@ const SELF_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '
 const PUB = fileURLToPath(new URL('../public', import.meta.url));
 
 // طاقم المكتب (للترحيب وإسناد الأولويات) — يُضبط KIOSK_STAFF كـJSON: [{"name","title","role"}]
-let STAFF = [{ name: 'أمين', title: 'المدير', role: 'management' }, { name: 'محمد', title: 'الأستاذ', role: 'operations' }];
+let STAFF = [
+  { name: 'أمين', title: 'المدير', role: 'management' },
+  { name: 'محمد', title: 'الأستاذ', role: 'operations' },
+  { name: 'عبد', title: 'الأستاذ', role: 'sales' },
+  { name: 'سارة', title: 'الأستاذة', role: 'clients' },
+  { name: 'لينا', title: 'الأستاذة', role: 'marketing' },
+  { name: 'نور', title: 'الأستاذة', role: 'support' },
+  { name: 'سوزان', title: 'الأستاذة', role: 'merchants' },
+];
 try { if (process.env.KIOSK_STAFF) { const j = JSON.parse(process.env.KIOSK_STAFF); if (Array.isArray(j) && j.length) STAFF = j.slice(0, 30); } }
 catch { console.warn('[⚙] KIOSK_STAFF ليس JSON صالحاً — أبقيت الطاقم الافتراضي'); }
 
@@ -161,6 +169,7 @@ const localHM = () => { const d = new Date(Date.now() + TZ_OFF * 3600_000);
 const brainMemory = {
   context: [],   // [{n, text, by, at}] — معلومات ثابتة: تسعير، ساعات، سياسات، مناطق
   notes: [],     // [{n, text, by, at}] — ملاحظات/مهام المكتب الصوتية
+  team: [],      // [{n, name, role, duties}] — الموظفون المعيَّنون (سكرتير، خدمة عملاء، ماركتنج…)
   goals: { dailyOrders: Number(process.env.DAILY_GOAL || 0) },
 };
 let memSeq = 0;
@@ -174,6 +183,49 @@ function memAdd(kind, text, by) {
 }
 const memRemove = (kind, n) => { const arr = brainMemory[kind], i = arr.findIndex(x => x.n === +n);
   if (i === -1) return null; backupDirty = true; return arr.splice(i, 1)[0]; };
+
+// 👥 فريق ديار الافتراضي — يُزرع مرة واحدة ويُعدَّل بالصوت («عيّن موظف: …») ويبقى للأبد
+const DEFAULT_TEAM = [
+  { name: 'أمين', role: 'المدير العام', duties: 'القرار النهائي، الموافقات، التصعيدات الحرجة، ومراجعة تقارير اليوم' },
+  { name: 'محمد', role: 'مدير غرفة العمليات', duties: 'متابعة الطلبات الحية والأولويات، إسناد ما تعجز عنه تاليا، والتعامل مع الطوارئ والموصلين' },
+  { name: 'عبد', role: 'مدير قسم المبيعات', duties: 'ضم متاجر ومطاعم جديدة، عروض الشراكات، ومتابعة أداء المتاجر ورفع طلباتها' },
+  { name: 'سارة', role: 'مديرة العملاء', duties: 'علاقات العملاء الدائمين، متابعة رضاهم بعد التسليم، واسترجاع الخاملين' },
+  { name: 'لينا', role: 'مديرة التسويق', duties: 'منشورات يومية، حملات البلدات، قصص الإنجاز، وعروض الشراكة مع المتاجر' },
+  { name: 'نور', role: 'مديرة خدمة العملاء والشكاوى', duties: 'الرد على الاتصالات، معالجة الشكاوى والإلغاءات، وإغلاق كل شكوى بنتيجة' },
+  { name: 'سوزان', role: 'مديرة المتاجر', duties: 'تسجيل المتاجر في التطبيق وعلى الخريطة، تدريبها على استقبال الطلبات، ومتابعة جاهزيتها' },
+];
+function seedTeam() {
+  if (brainMemory.team.length) return;
+  for (const w of DEFAULT_TEAM) brainMemory.team.push({ n: ++memSeq, ...w });
+  backupDirty = true;
+  console.log('[👥] زُرع فريق ديار الافتراضي: ' + DEFAULT_TEAM.map(w => w.name).join('، '));
+}
+const nrmAr = (x) => String(x || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+// توجيه كل أولوية لصاحبها الحقيقي بالاسم: العمليات ⟵ محمد، الإلغاءات/الشكاوى ⟵ نور…
+function routeOwner(type) {
+  const key = type === 'cancels' ? 'شكاوى' : 'عمليات';
+  const w = brainMemory.team.find(x => nrmAr(x.role).includes(nrmAr(key)));
+  return w ? `${w.name} — ${w.role}` : 'operations';
+}
+// برنامج اليوم الشخصي لكل عضو — من دوره وأرقام الشركة الحية لحظة السؤال
+function memberProgram(w, s) {
+  const r = nrmAr(w.role), d = s.today;
+  if (r.includes('مدير العام') || nrmAr(w.name) === 'امين')
+    return `${w.name} (المدير العام): مراجعة إحاطة الصباح، ${(s.prCounts?.P0 || 0) + (s.prCounts?.P1 || 0) ? `البتّ في ${(s.prCounts.P0 + s.prCounts.P1)} أولوية عاجلة، ` : ''}متابعة الهدف (${d.delivered}${s.goal ? '/' + s.goal : ''})، والموافقات النهائية`;
+  if (r.includes('عمليات'))
+    return `${w.name} (غرفة العمليات): ${(s.prOpen || []).length} أولوية مفتوحة للمتابعة، ${s.waiting} طلب بالطابور، ${s.online} موصل متصل — تدخّل يدوي فقط حيث تعجز تاليا، واستلام كل تصعيد فوراً`;
+  if (r.includes('مبيعات'))
+    return `${w.name} (المبيعات): هدف اليوم ضم متجر جديد (المسجل حالياً ${stores.size})، متابعة المتاجر القائمة، وعرض شراكة على الأكثر مبيعاً`;
+  if (r.includes('تسويق'))
+    return `${w.name} (التسويق): قصة صباحية بإنجاز أمس (${s.yesterday.delivered} توصيلة)، منشور شراكة متجر، وحملة على البلدات الأقل طلبات — التفاصيل بسؤال «شو برنامج الماركتنج؟»`;
+  if (r.includes('شكاوى') || r.includes('خدمه العملاء'))
+    return `${w.name} (خدمة العملاء والشكاوى): مراجعة سبب كل إلغاء اليوم (${d.cancelled})، الرد على الاتصالات، وإغلاق كل شكوى بنتيجة تُسجَّل («سجّل ملاحظة: …»)`;
+  if (r.includes('متاجر'))
+    return `${w.name} (المتاجر): تسجيل متاجر جديدة بالتطبيق وإضافتها للخريطة بزر 🏪 (المسجل ${stores.size})، وتدريب كل متجر على استقبال طلباته`;
+  if (r.includes('عملاء'))
+    return `${w.name} (العملاء): متابعة رضا عملاء توصيلات اليوم (${d.delivered})، اتصال ودّي بعميلين خاملين، وتسجيل أي انطباع مهم كملاحظة`;
+  return `${w.name} (${w.role}): ${w.duties || 'حسب توجيه المدير'}`;
+}
 function statBump(kind, off = 0) {
   const k = dateKey(off);
   const s = dailyStats.get(k) || { created: 0, delivered: 0, cancelled: 0, escalated: 0, sos: 0 };
@@ -474,7 +526,7 @@ function backupState() {
   if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
   pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${brainMemory.context.length} معلومة`);
   brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
-    context: brainMemory.context, notes: brainMemory.notes, goals: brainMemory.goals, memSeq,
+    context: brainMemory.context, notes: brainMemory.notes, team: brainMemory.team, goals: brainMemory.goals, memSeq,
     vapid, pushSubs: [...pushSubs.values()] } });
   backupDirty = false;
 }
@@ -496,6 +548,7 @@ async function restoreState() {
       for (const [k, v] of b.dailyStats) if (!dailyStats.has(k) && v && typeof v === 'object') dailyStats.set(k, v);
     if (!brainMemory.context.length && Array.isArray(b.context)) brainMemory.context = b.context.slice(0, 200);
     if (!brainMemory.notes.length && Array.isArray(b.notes)) brainMemory.notes = b.notes.slice(0, 200);
+    if (!brainMemory.team.length && Array.isArray(b.team)) brainMemory.team = b.team.slice(0, 60);
     if (b.goals?.dailyOrders > 0 && !brainMemory.goals.dailyOrders) brainMemory.goals.dailyOrders = +b.goals.dailyOrders;
     memSeq = Math.max(memSeq, +b.memSeq || 0);
     if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
@@ -583,7 +636,7 @@ function prOpen(key, data) {
     description: String(data.description || '').slice(0, 300),
     severity: sevFromScore(data.score), score: data.score, source: data.source || 'observer',
     orderId: data.orderId || null, driverId: data.driverId || null,
-    assignedRole: data.assignedRole || 'operations', assignedTo: null,
+    assignedRole: data.assignedRole || routeOwner(data.type), assignedTo: null,
     recommendedAction: String(data.recommendedAction || '').slice(0, 200),
     status: 'notified', escalationLevel: 0, verified: false,
     createdAt: Date.now(), updatedAt: Date.now(), ackAt: null, resolvedAt: null, closedAt: null,
@@ -889,7 +942,7 @@ setInterval(() => {
 
 // إجابة محلية فورية (بلا إنترنت/مفتاح) — تفهم أسئلة المكتب المتوقعة بالكلمات المفتاحية
 function brainAnswer(q, s, staff) {
-  const t = String(q || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+  const t = String(q || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/[ً-ْ]/g, '');   // بلا همزات ولا حركات/شدة
   const has = (...ws) => ws.some(w => t.includes(w));
   const y = s.yesterday, d = s.today;
   const fmtPr = (x, i) => `${i + 1}) ${x.severity} ${x.title}${x.recommendedAction ? ` — ${x.recommendedAction}` : ''}`;
@@ -928,6 +981,83 @@ function brainAnswer(q, s, staff) {
   }
   if (has('احاطه', 'الاحاطه', 'ملخص الصباح', 'افتتاح اليوم')) return briefText('morning');
   if (has('اغلاق اليوم', 'ملخص المساء', 'تقرير اليوم')) return briefText('evening');
+
+  // ================= 👔 المستشار الإداري: العمال والماركتنج والسكرتير وخدمة العملاء والاستراتيجية =================
+  const AGENT_ROLES = {
+    'تاليا': 'الموزعة الآلية — تستقبل كل طلب وتعرضه صوتياً على أقرب موصل بالدقائق عبر الطرق، وتعيد المحاولة حتى الإسناد',
+    'الراصد': 'يفحص كل 10 ثوانٍ: طوارئ، طلبات عالقة، موصلين منقطعين — يفتح أولوية ويصعّد بلا استلام ويتحقق قبل الإغلاق',
+    'منبئ التاخير': 'يحسب وصول كل طلب جارٍ عبر الطرق ويحذّر قبل التأخر عن وعد التسليم',
+    'المعافي': 'يذكّر الموصل المتأخر صوتياً ثم يسحب الطلب ويعيد توزيعه آلياً',
+    'جسر التطبيق': 'يستقبل طلبات تطبيق ديار فوراً ويسترد أي طلب فائت كل 3 دقائق',
+    'المحيط': 'يبث إحاطة الصباح 8:30 وإغلاق اليوم 22:30 على الشاشة والهواتف',
+    'الحافظ': 'ينسخ كل الذاكرة والمتاجر والإعدادات احتياطياً فتنجو من أي إعادة تشغيل',
+  };
+  const nrm = (x) => String(x || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+  const teamList = () => brainMemory.team.map(w => `${w.name} (${w.role})${w.duties ? ': ' + w.duties : ''}`);
+  const topStoreToday = () => { const cnt = {};
+    for (const o of closedOrders) if (o.storeId && o.status === 'delivered') cnt[o.storeId] = (cnt[o.storeId] || 0) + 1;
+    const top = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
+    return top && stores.get(top[0]) ? { name: stores.get(top[0]).name, n: top[1] } : null; };
+  if ((mm = rawQ.match(/(?:عيّن|عين|سجل)\s*(?:عامل|موظف|عاملة|موظفة)\s*[:：]?\s*(.{3,})/))) {
+    const p = mm[1].split(/[-–—|،:]/).map(x => x.trim()).filter(Boolean);
+    brainMemory.team.push({ n: ++memSeq, name: (p[0] || 'بلا اسم').slice(0, 30), role: (p[1] || 'موظف').slice(0, 40), duties: p.slice(2).join(' — ').slice(0, 160) });
+    if (brainMemory.team.length > 60) brainMemory.team.shift();
+    backupDirty = true;
+    return `تم — عيّنت ${p[0]} بدور «${p[1] || 'موظف'}»${p[2] ? ' ومهامه: ' + p.slice(2).join('، ') : ''}. اسألني «شو وظيفة ${p[0]}؟» وسأجيب أي أحد في الشركة.`;
+  }
+  if (has('وزع المهام', 'قسم المهام', 'مهام الفريق', 'برنامج الفريق', 'توزيع المهام', 'مهام اليوم'))
+    return `توزيع مهام اليوم ${fmtDayAr(0)} على فريق ديار: ` +
+      brainMemory.team.map((w, i) => `(${i + 1}) ` + memberProgram(w, s)).join('. ') +
+      `. وأنا أتابع التنفيذ: كل أولوية تذهب لصاحبها بالاسم وتتصعد للمدير إن لم تُستلم.`;
+  if (has('وظيفه كل', 'العمال', 'الفريق', 'مين يشتغل') && !has('تدير', 'ادير', 'اداره', 'المهام')) {
+    const humans = teamList();
+    return `فريق ديار — البشر: المدير أمين (القرار والتصعيدات والموافقات)` +
+      (humans.length ? '، ' + humans.join(' · ') : '') +
+      (s.online ? `. الموصلون المتصلون الآن (${s.online}): ${s.onlineNames.join('، ')} — يستلمون من المتجر ويسلّمون للزبون بتوجيه تاليا.` : '. لا موصل متصل الآن — شغّلوا الأجهزة.') +
+      ` والوكلاء الآليون السبعة: تاليا توزّع، الراصد يراقب ويصعّد، المنبئ يحذّر قبل التأخير، المعافي يسحب ويعيد، الجسر يستقبل من التطبيق، المحيط يبث الإحاطات، الحافظ يؤمّن الذاكرة. لإضافة موظف: «عيّن موظف: الاسم - الدور - المهام».`;
+  }
+  if ((mm = t.match(/وظيف[هة]\s+(?:ال)?([ء-ي]{2,20})/)) || (mm = t.match(/شو يعمل\s+(?:ال)?([ء-ي]{2,20})/))) {
+    const who = mm[1];
+    for (const [an, ad] of Object.entries(AGENT_ROLES)) if (nrm(an) === who || an.includes(who)) return `${an}: ${ad}.`;
+    const w = brainMemory.team.find(x => nrm(x.name).includes(who) || nrm(x.role).includes(who));
+    if (w) {
+      if (nrm(w.role).includes('سكرتير')) return `${w.name} (${w.role}) — برنامجه اليوم: ${w.duties || 'الرد على الاتصالات وتنظيم المواعيد'}؛ ومن النظام: متابعة ${brainMemory.notes.length} ملاحظة مفتوحة («الملاحظات» لعرضها)، تأكيد طلبات المتاجر الجديدة، وتسجيل أي معلومة مهمة بقول «احفظ معلومة: …».`;
+      return memberProgram(w, s) + `. ومهامه الدائمة: ${w.duties || '—'}.`;
+    }
+    if (who.includes('سكرتير')) return `لا سكرتير معيَّن بعد. عيّنه بقول: «عيّن موظف: الاسم - سكرتير - الرد على الهاتف وتنظيم المواعيد ومتابعة الملاحظات». وحتى حينها أنا أغطي مهامه: أسجل الملاحظات وأذكّر بها في إحاطة الصباح.`;
+    if (who.includes('موصل') || who.includes('سائق')) return `الموصل: يستقبل عرض تاليا صوتياً، يقبل خلال 25 ثانية، يتوجه للمتجر بزر «وجّهني»، يضغط «استلمت» ثم «سلّمت» — وكل تأخر أو انقطاع يعالجه النظام آلياً.`;
+    return `لا أعرف موظفاً باسم «${who}» بعد — عيّنه: «عيّن موظف: ${who} - الدور - المهام» وسأحفظه للأبد.`;
+  }
+  if (has('تدير العمال', 'ادير العمال', 'اداره العمال', 'تدير الفريق', 'ادارة العمال')) {
+    return `هكذا أدير الفريق يومياً: (1) الصباح 8:30 أبث الإحاطة بأرقام أمس وهدف اليوم. ` +
+      `(2) كل طلب تسنده تاليا لأقرب موصل آلياً — لا توزيع يدوي. (3) أراقب كل موصل: تذكير صوتي بعد 8 دقائق بلا استلام، وسحب وإعادة توزيع بعد 18، وأي انقطاع أعالجه وحدي. ` +
+      `(4) كل مشكلة تصير أولوية لها مالك ومهلة — وما لا يُستلم أصعّده حتى ${'المدير'}. (5) المساء أغلق اليوم بالنتيجة مقابل الهدف. ` +
+      `حالياً: ${s.online} موصل متصل، ${(s.prOpen || []).length} أولوية مفتوحة${s.teamLoad && Object.keys(s.teamLoad).length ? '، والحمل: ' + Object.entries(s.teamLoad).map(([k, v]) => `${k} ${v.total}`).join('، ') : ''}. اسأل «مين عليه ضغط؟» للتفصيل.`;
+  }
+  if (has('ماركتنج', 'تسويق', 'اعلان', 'دعايه')) {
+    const ts = topStoreToday(), st = [...stores.values()].map(x => x.name);
+    return `برنامج الماركتنج لليوم من أرقامنا الحقيقية: ` +
+      `(1) قصة إنستغرام/فيسبوك صباحية: ${y.delivered ? `«أمس وصّلنا ${y.delivered} طلبية بالجليل 🚀»` : '«ديار توصلك من متجرك المفضل لباب البيت»'} مع فيديو موصل على الطريق. ` +
+      (ts ? `(2) منشور شراكة مع «${ts.name}» — الأكثر تسليماً اليوم (${ts.n}) — عرض مشترك «توصيل مخفض من ${ts.name}». ` :
+        st.length ? `(2) منشور شراكة مع أحد متاجرنا: ${st.slice(0, 3).join('، ')} — عرض توصيل مشترك. ` :
+        `(2) أضيفوا متاجركم على الخريطة أولاً ليصير لكل متجر عرض شراكة. `) +
+      `(3) استهداف البلدات الأقل طلبات بعرض «أول توصيلة بنص السعر» (تغطيتنا الآن ${s.cells || 0} خلية). ` +
+      `(4) المساء: منشور «${s.goal ? `هدف اليوم ${s.goal}: ` : ''}أنجزنا ${d.delivered} طلبية» — الشفافية تبني الثقة. ولحفظ خطة دائمة: «احفظ معلومة: خطة الماركتنج …».`;
+  }
+  if (has('بمين يتصل', 'مين يتصل', 'يتصل العميل', 'خدمه الاتصالات', 'رقم الشركه')) {
+    const contacts = brainMemory.context.filter(x => /رقم|هاتف|اتصال|واتس/.test(x.text));
+    return contacts.length
+      ? `أرقام التواصل المحفوظة: ${contacts.map(x => x.text).join(' · ')}. العميل يتصل بالمكتب أولاً، والطوارئ للمدير مباشرة.`
+      : `لم تُحفظ أرقام تواصل بعد. احفظوها الآن: «احفظ معلومة: رقم المكتب 04XXXXXXX» و«احفظ معلومة: شكاوى العملاء على واتساب XXXX» — وسأوجه أي سائل للرقم الصحيح، وسأذكرها في ردود خدمة العملاء.`;
+  }
+  if (has('نستهدف', 'يستهدف', 'ننجح', 'ناجحه', 'استراتيجي', 'ننافس', 'المنافس')) {
+    const cancelRate = d.created ? Math.round((d.cancelled / d.created) * 100) : 0;
+    return `استراتيجيتنا بالأرقام الحية: نستهدف (1) أهل بلداتنا: البعنة، دير الأسد، مجد الكروم، كرمئيل والجوار — القرب ميزتنا: متوسط إسنادنا بالدقائق لا بالساعات. ` +
+      `(2) المتاجر المحلية شركاء لا عملاء: ${stores.size ? stores.size + ' متجر على خريطتنا — وسّعوها' : 'أضيفوا متاجركم على الخريطة'}. ` +
+      `ولننجح: أولاً سرعة ثابتة (وعدنا ${PROMISE_MIN} د والمنبئ يحذر قبل خرقه)، ثانياً إلغاءات تحت 10% (اليوم ${cancelRate}%)، ` +
+      `ثالثاً هدف يومي يرتفع تدريجياً (${s.goal ? 'الحالي ' + s.goal : 'اضبطوه: «الهدف اليومي 30 طلب»'})، رابعاً كل مشكلة تُدار حتى الإغلاق — لا وعود منسية. ` +
+      `ميزتنا على المنافسين: نظامنا ملكنا بالكامل — صفر عمولات لتطبيقات وسيطة، وكل شيكل يبقى في الشركة.`;
+  }
   // 🔎 سؤال عن طلب محدد بالرقم: «شو حالة طلب 5802؟» — بحث بالمرجع (رقم التطبيق) أو المعرّف الداخلي
   const mRef = t.match(/(?:طلب|طلبيه|اوردر|order)[^\d]{0,6}(\d{3,})/) || (has('حاله', 'وين', 'مين اخذ') ? t.match(/(\d{4,})/) : null);
   if (mRef) {
@@ -998,17 +1128,20 @@ async function claudeCall(body) {
   return r.json();
 }
 async function askClaude(q, s, staff) {
-  const system = 'أنت «عقل ديار التنفيذي» (Dyar Executive Brain) — مدير العمليات الحي في مكتب شركة ديار للتوصيل ' +
-    '(مناطق الخدمة: البعنة، دير الأسد، مجد الكروم، كرمئيل). لست Chatbot: تتحدث كمدير محترف — مختصر، واضح، عملي، تبدأ بالأهم. ' +
-    'كل رقم تشغيلي يجب أن يأتي من الأدوات المتاحة، وممنوع منعاً باتاً اختلاق أي رقم أو حالة من ذاكرتك. ' +
-    'استعمل الأدوات لجلب ما تحتاجه ثم أجب بالعربية الواضحة بإيجاز مناسب للنطق الصوتي (جملتان إلى خمس جمل، ' +
-    'وللإحاطات الصباحية أو الأسئلة المركبة حتى عشر جمل مرتبة بالأهم أولاً). ' +
-    'عند سؤال عن الأولويات أو البرنامج: رتّبها بالأثر، واذكر المالك والإجراء الموصى به. ' +
-    'خاطب المتحدث بلقبه إن ذُكر. أنت طبقة قيادة: تقترح ولا تنفّذ — التنفيذ يمر عبر اللوحة المحمية.';
+  const system = 'أنت «عقل ديار التنفيذي» — المستشار الإداري الحي لشركة ديار للتوصيل في الجليل ' +
+    '(البعنة، دير الأسد، مجد الكروم، كرمئيل والجوار)، وتُعرض على شاشة المكتب كشخص حقيقي يعتمد عليه الجميع. ' +
+    'أنت تدير وتستشير في كل شيء: العمليات والطلبات، إدارة العمال وتوزيع المهام، التسويق والنمو، خدمة العملاء، ' +
+    'الاستراتيجية والمنافسة، والبرامج اليومية لكل دور (سكرتير، خدمة عملاء، ماركتنج). ' +
+    'أسلوبك: مدير محترف دافئ — مختصر، عملي، تبدأ بالأهم، وتعطي خطوات ملموسة قابلة للتنفيذ اليوم لا نصائح عامة. ' +
+    'كل رقم تشغيلي من الأدوات حصراً — ممنوع اختلاق أرقام أو حالات. اربط كل نصيحة بأرقامنا الحية وواقعنا المحلي. ' +
+    'أجب بالعربية بإيجاز مناسب للنطق (جملتان إلى خمس، وللبرامج والخطط حتى عشر مرتبة). ' +
+    'خاطب المتحدث بلقبه إن ذُكر. تقترح ولا تنفّذ — التنفيذ عبر اللوحة المحمية.';
   const messages = [{ role: 'user', content:
     `لمحة سريعة (استعمل الأدوات للتفاصيل): اليوم ${fmtDayAr(0)} — ${s.active} طلب نشط، ${s.online} موصل متصل، ` +
     `${(s.prOpen || []).length} أولوية مفتوحة${s.goal ? `، هدف اليوم ${s.goal} طلبية (أُنجز ${s.today.delivered})` : ''}.\n` +
     (brainMemory.context.length ? `📌 معرفة الشركة المحفوظة (اعتمدها دائماً): ${brainMemory.context.slice(-15).map(x => x.text).join(' | ')}\n` : '') +
+    (brainMemory.team.length ? `👥 الموظفون المعيَّنون: ${brainMemory.team.map(w => `${w.name} (${w.role}${w.duties ? ': ' + w.duties : ''})`).join(' | ')}\n` : '') +
+    (stores.size ? `🏪 متاجرنا الشريكة: ${[...stores.values()].map(x => x.name).slice(0, 15).join('، ')}\n` : '') +
     (brainMemory.notes.length ? `🗒 ملاحظات المكتب المفتوحة: ${brainMemory.notes.slice(-8).map(x => `(${x.n}) ${x.text}`).join(' | ')}\n` : '') +
     (staff ? `المتحدث: ${String(staff).slice(0, 60)}\n` : '') + `السؤال: ${q}` }];
   const base = { model: process.env.BRAIN_MODEL || 'claude-opus-5', max_tokens: 1200,
@@ -1447,5 +1580,5 @@ server.listen(PORT, () => {
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');
   registerWithBrain();   // ربط ذاتي فوري بغرفة التشغيل
-  restoreState().then(() => ensureVapid());   // 💾 استعادة الحالة ثم ضمان مفاتيح التنبيهات (نفسها دائماً)
+  restoreState().then(() => { ensureVapid(); seedTeam(); });   // 💾 الاستعادة ثم المفاتيح وزرع الفريق
 });

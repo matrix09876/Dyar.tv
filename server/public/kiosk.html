@@ -51,6 +51,10 @@
        box-shadow:0 0 5vh rgba(226,67,46,.35); display:grid; place-items:center;
        animation:breathe 3.2s ease-in-out infinite; transition:box-shadow .3s}
   #orb .icon{font-size:6.5vh; filter:drop-shadow(0 2px 8px rgba(0,0,0,.4))}
+  #face .brow{transition:transform .25s}
+  body.thinking #face .brow{transform:translateY(-5px)}
+  body.listening #face .brow{transform:translateY(-2px)}
+  #face{filter:drop-shadow(0 3px 10px rgba(0,0,0,.35))}
   @keyframes breathe{0%,100%{transform:scale(1)} 50%{transform:scale(1.045)}}
   body.listening #orb{background:radial-gradient(circle at 35% 30%, #7ef0ae 0%, var(--online) 45%, #145b36 100%);
                       box-shadow:0 0 7vh rgba(63,191,119,.55); animation:breathe 1s ease-in-out infinite}
@@ -147,8 +151,23 @@
 
 <main>
   <section class="stage">
-    <div id="orb" title="اضغط للسؤال"><div class="icon">🎙</div></div>
-    <div id="orbState">اضغط الدائرة أو قُل «يا ديار» ثم اسأل</div>
+    <div id="orb" title="اضغط للسؤال">
+      <svg id="face" viewBox="0 0 200 212" style="width:90%;height:90%">
+        <ellipse cx="100" cy="198" rx="64" ry="26" fill="#26304a"/>
+        <path d="M100 198 l-10 -15 10 -10 10 10 Z" fill="#e2432e"/>
+        <rect x="87" y="158" width="26" height="24" rx="9" fill="#eccfa9"/>
+        <ellipse cx="100" cy="104" rx="54" ry="62" fill="#f2dbb8"/>
+        <path d="M46 96 Q44 36 100 34 Q156 36 154 96 Q150 58 100 56 Q50 58 46 96 Z" fill="#2f2620"/>
+        <rect class="brow" x="62" y="84" width="26" height="6" rx="3" fill="#2f2620"/>
+        <rect class="brow" x="112" y="84" width="26" height="6" rx="3" fill="#2f2620"/>
+        <g id="eyesG">
+          <circle cx="76" cy="102" r="7" fill="#20242e"/><circle cx="124" cy="102" r="7" fill="#20242e"/>
+          <circle cx="78.5" cy="99.5" r="2.2" fill="#fff"/><circle cx="126.5" cy="99.5" r="2.2" fill="#fff"/>
+        </g>
+        <path id="mouth" d="M80 140 Q100 150 120 140" stroke="#9c5f50" stroke-width="5" fill="none" stroke-linecap="round"/>
+      </svg>
+    </div>
+    <div id="orbState">أنا منتبه دائماً — تكلم مباشرة أو قل «يا ديار»</div>
     <div id="answer"><span class="who">عقل ديار</span><span id="answerText">أهلاً بكم في غرفة عمليات ديار. قولوا «يا ديار» ثم اسألوا: كم طلبية أمس؟ ما المشاكل؟ شو عندي؟ ما برنامج اليوم؟</span></div>
     <div id="asOf"></div>
   </section>
@@ -158,14 +177,14 @@
       <div id="priosList"><div id="prioEmpty">🟢 لا أولويات مفتوحة — التشغيل مستقر</div></div>
     </div>
     <div class="panel hints">
-      <h2>💬 أوامر صوتية</h2>
-      «<b>يا ديار، أنا أمين</b>» ترحيب وتخصيص ·
-      «<b>يا ديار، كم طلبية أمس؟</b>» ·
-      «<b>يا ديار، ما المشاكل؟</b>» ·
-      «<b>يا ديار، شو عندي؟</b>» مهامك ·
-      «<b>يا ديار، مين عليه ضغط؟</b>» حمل الفريق ·
-      «<b>يا ديار، استلمت</b>» تأكيد أول أولوية ·
-      «<b>يا ديار، أوقف</b>» إسكات فوري
+      <h2>💬 اسألني عن أي شيء — أنا مستشار الشركة</h2>
+      «<b>وزّع المهام على الفريق</b>» برنامج كل عضو ·
+      «<b>شو وظيفة محمد؟</b>» (أو سارة، لينا، نور، سوزان، عبد…) ·
+      «<b>شو برنامج الماركتنج؟</b>» ·
+      «<b>كيف نجعل الشركة ناجحة؟</b>» ·
+      «<b>كم طلبية أمس؟ ما المشاكل؟</b>» ·
+      «<b>سجّل ملاحظة: …</b>» و«<b>احفظ معلومة: …</b>» ·
+      «<b>أوقف</b>» إسكات — وبعد كل جواب اسأل مباشرة بلا «يا ديار»
     </div>
   </aside>
 </main>
@@ -227,9 +246,23 @@ function speak(text, then) {
   const v = voices.find(x => x.lang && x.lang.toLowerCase().startsWith(lang())); if (v) u.voice = v;
   u.rate = 1.03;
   document.body.classList.add('speaking'); speakingNow = true;
-  u.onend = u.onerror = () => { speakingNow = false; document.body.classList.remove('speaking'); then && then(); };
+  mouthStart();                                        // الفم يتحرك مع الكلام
+  u.onend = u.onerror = () => { speakingNow = false; mouthStop(); document.body.classList.remove('speaking'); then && then(); };
   speechSynthesis.speak(u);
 }
+/* 🙂 حياة الوجه: فم يتحرك أثناء الكلام + رمشة عين طبيعية */
+const MOUTHS = ['M80 140 Q100 150 120 140',
+  'M84 137 Q100 158 116 137 Q100 145 84 137',
+  'M86 140 Q100 147 114 140 Q100 153 86 140'];
+let mouthT = null;
+function mouthStart() { let i = 0; clearInterval(mouthT);
+  mouthT = setInterval(() => { const m = document.getElementById('mouth'); if (m) m.setAttribute('d', MOUTHS[++i % MOUTHS.length]); }, 140); }
+function mouthStop() { clearInterval(mouthT); mouthT = null;
+  const m = document.getElementById('mouth'); if (m) m.setAttribute('d', MOUTHS[0]); }
+setInterval(() => { const g = document.getElementById('eyesG'); if (!g) return;
+  g.setAttribute('transform', 'translate(0 102) scale(1 0.08) translate(0 -102)');
+  setTimeout(() => g.removeAttribute('transform'), 140);
+}, 3600);
 const shutUp = () => { if ('speechSynthesis' in window) speechSynthesis.cancel(); speakingNow = false; document.body.classList.remove('speaking','thinking'); };
 let speakingNow = false;
 
@@ -382,9 +415,10 @@ async function handleUtterance(raw) {
   try {
     const j = await ask(q);
     document.body.classList.remove('thinking');
-    $('#orbState').textContent = 'اسألني المزيد — اضغط الدائرة أو قل «يا ديار»';
+    $('#orbState').textContent = 'تفضل بسؤالك التالي — أنا أسمعك';
     showAnswer(j.answer, 'عقل ديار', j.asOf);
-    speak(j.answer, maybeRestartListening);
+    // 🗣 نافذة محادثة: بعد كل جواب تُقبل الأسئلة 12 ثانية بلا كلمة تنبيه — حوار طبيعي متواصل
+    speak(j.answer, () => { armedUntil = Date.now() + 12_000; maybeRestartListening(); });
   } catch {
     document.body.classList.remove('thinking');
     const msg = 'تعذر الوصول للخادم — تأكدوا من الشبكة وحاولوا ثانية.';
@@ -436,6 +470,7 @@ function maybeRestartListening() { if (alwaysOn && !listening) setTimeout(() => 
 $('#orb').onclick = () => startListening(true);
 $('#alwaysBtn').onclick = () => {
   alwaysOn = !alwaysOn;
+  localStorage.setItem('kiosk_always', alwaysOn ? '1' : '0');
   $('#alwaysBtn').textContent = '🎙 «يا ديار»: ' + (alwaysOn ? 'منتبه' : 'مغلق');
   $('#alwaysBtn').classList.toggle('on', alwaysOn);
   if (alwaysOn) startListening(false); else if (rec) try { rec.abort(); } catch {}
@@ -463,7 +498,10 @@ function openGate(msg) {
 async function enter(hello) {
   $('#gate').classList.add('hidden');
   startPolling(); connectWS();
-  if (hello) { const g = `${partOfDay()}! أنا عقل ديار التنفيذي، جاهز في غرفة العمليات. قولوا «يا ديار» ثم اسألوا، أو عرّفوا عن أنفسكم.`; showAnswer(g); speak(g); }
+  // 🎙 استماع دائم افتراضياً — بلا أي ضغط زر (يُطفأ من الزر إن أُريد)
+  if ((localStorage.getItem('kiosk_always') ?? '1') === '1')
+    setTimeout(() => { if (!alwaysOn) $('#alwaysBtn').onclick(); }, 900);
+  if (hello) { const g = `${partOfDay()}! أنا عقل ديار — مستشاركم في كل شيء: الطلبات، الفريق، الماركتنج، والاستراتيجية. تكلموا معي مباشرة.`; showAnswer(g); speak(g); }
 }
 const normDigits = (s) => String(s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).trim();
 async function tryGate() {
