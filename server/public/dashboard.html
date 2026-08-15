@@ -2,6 +2,8 @@
 <html lang="ar" dir="rtl">
 <head>
 <meta charset="utf-8">
+<link rel="manifest" href="/manifest.json">
+<link rel="icon" href="/icon.svg">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dyar Connect — غرفة العمليات</title>
 <link rel="stylesheet" href="/vendor/maplibre-gl.css">
@@ -139,6 +141,7 @@
     <span class="chip" title="طلبات اليوم — أُنجز / الهدف">📦 اليوم <span class="num" id="cToday">0</span> · ✅ <span class="num" id="cDone">0</span><span class="num" id="cGoal"></span></span>
     <span class="chip" id="cPrioChip" style="cursor:pointer;display:none" title="أولويات مفتوحة — انقر للفتح">⚡ <span class="num" id="cPrio">0</span></span>
     <button id="brainAskBtn" title="اسأل عقل ديار: حالة طلب، الهدف، الملاحظات، الإحاطة…">🧠 اسأل</button>
+    <button id="pushBtn" title="اشترك بتنبيهات هاتفك: العاجل والتصعيدات والإحاطات تصلك أينما كنت">🔔 تنبيهاتي</button>
     <button id="talkBtn" title="اضغط مطولًا للتحدث لكل الأجهزة">🎙 تحدث</button>
     <button id="addBtn">➕ جهاز</button>
     <button id="addStoreBtn" title="انقر ثم حدد موقع المتجر على الخريطة">🏪 متجر</button>
@@ -843,6 +846,26 @@
     $('linksStrip').innerHTML = items.map(([c, n, d]) =>
       `<span class="chip" style="font-size:10.5px" title="${esc(d)}">${dot(c)}${esc(n)} · ${esc(d)}</span>`).join('');
   }
+
+  // ================= 📳 تنبيهات الهاتف (وضع المشغّل الواحد): العاجل يصلك أينما كنت =================
+  const urlB64ToU8 = (s) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from([...b].map(c => c.charCodeAt(0))); };
+  $('pushBtn').onclick = async () => {
+    try {
+      if (!('serviceWorker' in navigator) || !('PushManager' in window)) return alert('هذا المتصفح لا يدعم التنبيهات — استعمل Chrome على أندرويد، أو Safari 16.4+ بعد «إضافة للشاشة الرئيسية» على iPhone.');
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      if ((await Notification.requestPermission()) !== 'granted') return alert('يجب السماح بالتنبيهات من إعدادات المتصفح.');
+      const { key } = await (await fetch('/api/push/key', { headers: { 'x-kiosk-pin': pin } })).json();
+      const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(key) });
+      const j = await (await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pin, sub }) })).json();
+      if (!j.ok) throw new Error(j.error || 'فشل التسجيل');
+      await fetch('/api/push/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin }) });
+      $('pushBtn').textContent = '🔔 مفعّلة ✓';
+      alert('تم! أرسلت تنبيه فحص الآن — من هذه اللحظة: كل P0/P1 وتصعيد بلا استلام وإحاطة يومية تصلك هنا حتى والمتصفح مغلق.');
+    } catch (e) { alert('تعذر التفعيل: ' + e.message); }
+  };
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
   // ================= ⌘K لوحة الأوامر: بحث ونفاذ فوري لكل شيء =================
   const cmdActions = [

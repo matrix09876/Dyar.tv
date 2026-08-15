@@ -1,0 +1,14 @@
+{
+  "name": "Dyar Ops — غرفة عمليات ديار",
+  "short_name": "Dyar Ops",
+  "description": "لوحة عمليات ديار: الطلبات، الموصلون، الخريطة الحية، عقل ديار، وتنبيهات التصعيد",
+  "start_url": "/",
+  "display": "standalone",
+  "dir": "rtl",
+  "lang": "ar",
+  "background_color": "#0e1117",
+  "theme_color": "#e2432e",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}

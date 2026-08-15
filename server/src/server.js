@@ -16,7 +16,8 @@ import { extname, join, normalize } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
-import { timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateKey,
+         generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
 const PIN = process.env.DYAR_PIN || '1234';
@@ -397,6 +398,62 @@ function brainEvent(event, payload) {
     .catch(() => { linkState.brainErrAt = Date.now(); });
 }
 
+// ================= 📳 تنبيهات الهاتف — Web Push ذاتي بالكامل (VAPID، بلا أي خدمة خارجية) =================
+// وضع المشغّل الواحد: المدير لا يجلس أمام شاشة — العاجل (P0/P1، تصعيد بلا استلام، طوارئ، الإحاطات)
+// يصل هاتفه مباشرة حتى والمتصفح مغلق. التوقيع (ES256) والتشفير (RFC 8291) بأدوات Node وحدها.
+const b64u = (b) => Buffer.from(b).toString('base64url');
+let vapid = null;                          // {pub, pubJwk, privJwk} — يُولَّد مرة ويُحفظ في النسخة الدائمة
+const pushSubs = new Map();                // endpoint -> اشتراك الجهاز {endpoint, keys:{p256dh, auth}}
+function ensureVapid() {
+  if (vapid) return;
+  const { publicKey, privateKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+  const pubJwk = publicKey.export({ format: 'jwk' }), privJwk = privateKey.export({ format: 'jwk' });
+  vapid = { pubJwk, privJwk,
+    pub: b64u(Buffer.concat([Buffer.from([4]), Buffer.from(pubJwk.x, 'base64url'), Buffer.from(pubJwk.y, 'base64url')])) };
+  backupDirty = true;
+  console.log('[📳] وُلدت مفاتيح VAPID لتنبيهات الهاتف');
+}
+function vapidJwt(aud) {
+  const unsigned = b64u(JSON.stringify({ typ: 'JWT', alg: 'ES256' })) + '.' +
+    b64u(JSON.stringify({ aud, exp: Math.floor(Date.now() / 1000) + 12 * 3600, sub: 'mailto:info@cyberamin.com' }));
+  const key = createPrivateKey({ key: vapid.privJwk, format: 'jwk' });
+  return unsigned + '.' + b64u(cryptoSign('sha256', Buffer.from(unsigned), { key, dsaEncoding: 'ieee-p1363' }));
+}
+const hkdf1 = (salt, ikm, info, len) => {
+  const prk = createHmac('sha256', salt).update(ikm).digest();
+  return createHmac('sha256', prk).update(Buffer.concat([info, Buffer.from([1])])).digest().subarray(0, len);
+};
+function encryptPush(sub, payload) {                       // RFC 8291 — aes128gcm
+  const uaPub = Buffer.from(sub.keys.p256dh, 'base64');
+  const auth = Buffer.from(sub.keys.auth, 'base64');
+  const ecdh = createECDH('prime256v1');
+  const asPub = ecdh.generateKeys();
+  const shared = ecdh.computeSecret(uaPub);
+  const ikm = hkdf1(auth, shared, Buffer.concat([Buffer.from('WebPush: info\0'), uaPub, asPub]), 32);
+  const salt = randomBytes(16);
+  const cek = hkdf1(salt, ikm, Buffer.from('Content-Encoding: aes128gcm\0'), 16);
+  const nonce = hkdf1(salt, ikm, Buffer.from('Content-Encoding: nonce\0'), 12);
+  const c = createCipheriv('aes-128-gcm', cek, nonce);
+  const ct = Buffer.concat([c.update(Buffer.concat([Buffer.from(payload), Buffer.from([2])])), c.final(), c.getAuthTag()]);
+  return Buffer.concat([salt, Buffer.from([0, 0, 16, 0]), Buffer.from([asPub.length]), asPub, ct]);
+}
+async function pushOne(sub, data) {
+  const r = await fetch(sub.endpoint, {
+    method: 'POST',
+    headers: { 'content-encoding': 'aes128gcm', ttl: '600', urgency: 'high',
+      authorization: `vapid t=${vapidJwt(new URL(sub.endpoint).origin)}, k=${vapid.pub}` },
+    body: encryptPush(sub, JSON.stringify(data)),
+    signal: AbortSignal.timeout(8000),
+  });
+  if (r.status === 404 || r.status === 410) { pushSubs.delete(sub.endpoint); backupDirty = true; }   // جهاز ألغى اشتراكه
+  return r.status;
+}
+function pushAll(title, body, tag) {
+  if (!pushSubs.size || !vapid) return;
+  pulse('📳 المُبلِّغ — تنبيهات الهاتف', title);
+  for (const sub of [...pushSubs.values()]) pushOne(sub, { title, body: String(body || '').slice(0, 180), tag }).catch(() => {});
+}
+
 // ---------- 💾 ديمومة الحالة عبر غرفة التشغيل (تخزينها دائم) — تنجو من إعادة النشر ----------
 // المتاجر والإحصاء اليومي يُنسخان احتياطياً إلى غرفة التشغيل عند كل تغيّر، ويُستعادان عند الإقلاع.
 let backupDirty = false;
@@ -404,7 +461,8 @@ function backupState() {
   if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
   pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${brainMemory.context.length} معلومة`);
   brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
-    context: brainMemory.context, notes: brainMemory.notes, goals: brainMemory.goals, memSeq } });
+    context: brainMemory.context, notes: brainMemory.notes, goals: brainMemory.goals, memSeq,
+    vapid, pushSubs: [...pushSubs.values()] } });
   backupDirty = false;
 }
 setInterval(() => { if (backupDirty) backupState(); }, 60_000).unref?.();
@@ -427,7 +485,10 @@ async function restoreState() {
     if (!brainMemory.notes.length && Array.isArray(b.notes)) brainMemory.notes = b.notes.slice(0, 200);
     if (b.goals?.dailyOrders > 0 && !brainMemory.goals.dailyOrders) brainMemory.goals.dailyOrders = +b.goals.dailyOrders;
     memSeq = Math.max(memSeq, +b.memSeq || 0);
-    console.log(`[💾] استُعيدت الحالة: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة`);
+    if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
+    if (Array.isArray(b.pushSubs)) for (const s of b.pushSubs)
+      if (s?.endpoint?.startsWith('https://') && s.keys?.p256dh && s.keys?.auth && !pushSubs.has(s.endpoint)) pushSubs.set(s.endpoint, s);
+    console.log(`[💾] استُعيدت الحالة: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة · ${pushSubs.size} هاتف مشترك`);
   } catch { /* أفضل-جهد — يعمل بلا استعادة */ }
 }
 
@@ -520,7 +581,10 @@ function prOpen(key, data) {
   priorities.set(p.id, p); prByKey.set(key, p.id);
   prPush(p);
   brainEvent('priority_created', { priority: prPublic(p) });
-  if (SEV_RANK[p.severity] <= 1) talyaFeed(`⚡ ${p.severity} ${p.id}: ${p.title} → ${p.assignedRole}`);
+  if (SEV_RANK[p.severity] <= 1) {
+    talyaFeed(`⚡ ${p.severity} ${p.id}: ${p.title} → ${p.assignedRole}`);
+    pushAll(`⚡ ${p.severity} — ${p.title}`, p.recommendedAction || 'تحتاج قرارك الآن', p.id);   // 📳 للمدير أينما كان
+  }
   return p;
 }
 
@@ -648,6 +712,7 @@ function prSweep() {
         prPush(p);
         talyaFeed(`⏫ ${p.id} (${p.severity}): ${ESC_LABEL[p.escalationLevel]} — ${p.title}`);
         brainEvent('priority_escalated', { priority: prPublic(p) });
+        pushAll(`⏫ ${ESC_LABEL[p.escalationLevel]} — ${p.id}`, p.title, p.id);   // 📳 التصعيد يطارد المدير
       }
     } else if (p.status === 'resolved') {
       if (active !== true) prClose(p, p.outcome, p.assignedTo, active === false);
@@ -805,6 +870,7 @@ setInterval(() => {
     pulse('🌅 المُحيط — الإحاطات المجدولة', kind === 'morning' ? 'بثّ إحاطة الصباح' : 'بثّ إغلاق اليوم');
     broadcastOps({ t: 'brief', kind, text, at: Date.now() });   // الشاشة تنطقها واللوحة تعرضها
     brainEvent('brief', { kind, text });                        // وغرفة التشغيل تؤرشفها وتشعر بها
+    pushAll(kind === 'morning' ? '🌅 إحاطة ديار الصباحية' : '🌙 إغلاق يوم ديار', text, 'brief');   // 📳 وعلى الهاتف
   }
 }, 30_000).unref?.();
 
@@ -951,7 +1017,7 @@ async function askClaude(q, s, staff) {
 }
 
 // ---------- HTTP: ملفات + REST للوحة العقل ----------
-const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' };
+const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const readBody = (req) => new Promise((res) => {
   let b = '', done = false; const fin = (v) => { if (!done) { done = true; res(v); } };
   req.on('data', c => { b += c; if (b.length > 1e6) { req.destroy(); fin({}); } });   // لا يعلّق الطلب عند تجاوز الحجم
@@ -987,6 +1053,30 @@ async function handleHttp(req, res) {
     }
     return json(200, { answer: brainAnswer(q, s, b.staff), source: 'local', asOf: Date.now(), summary: s });
   }
+  // 📳 تنبيهات الهاتف: مفتاح الاشتراك + تسجيل جهاز + فحص — وضع المشغّل الواحد
+  if (url.pathname === '/api/push/key' && req.method === 'GET') {
+    if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
+    ensureVapid();
+    return json(200, { key: vapid.pub, devices: pushSubs.size });
+  }
+  if (url.pathname === '/api/push/subscribe' && req.method === 'POST') {
+    const b = await readBody(req);
+    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    const s = b.sub;
+    if (!s?.endpoint?.startsWith('https://') || !s.keys?.p256dh || !s.keys?.auth || pushSubs.size >= 20)
+      return json(400, { error: 'اشتراك غير صالح' });
+    pushSubs.set(s.endpoint, { endpoint: s.endpoint, keys: { p256dh: s.keys.p256dh, auth: s.keys.auth } });
+    backupDirty = true;
+    pulse('📳 المُبلِّغ — تنبيهات الهاتف', `جهاز جديد اشترك (${pushSubs.size} أجهزة)`);
+    return json(200, { ok: true, devices: pushSubs.size });
+  }
+  if (url.pathname === '/api/push/test' && req.method === 'POST') {
+    const b = await readBody(req);
+    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    pushAll('📳 فحص تنبيهات ديار', 'ممتاز — العاجل والتصعيدات والإحاطات ستصلك هنا أينما كنت.', 'test');
+    return json(200, { ok: true, devices: pushSubs.size });
+  }
+
   // أولويات مفتوحة + مغلقة حديثاً + حمل الفريق — لأي واجهة (تلفاز/حاسوب/هاتف)
   if (url.pathname === '/api/brain/priorities' && req.method === 'GET') {
     if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
@@ -1341,5 +1431,5 @@ server.listen(PORT, () => {
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');
   registerWithBrain();   // ربط ذاتي فوري بغرفة التشغيل
-  restoreState();        // 💾 استعادة المتاجر والإحصاء من النسخة الاحتياطية (إن وُجدت)
+  restoreState().then(() => ensureVapid());   // 💾 استعادة الحالة ثم ضمان مفاتيح التنبيهات (نفسها دائماً)
 });
