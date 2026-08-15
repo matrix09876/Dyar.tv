@@ -53,6 +53,7 @@ const OFFLINE_TTL_MS = 24 * 3600_000;     // موصل غير متصل يُنسى
 // ---------- الطلبات: مسار مُدار مفهرس، مع إخلاء الطلبات المنتهية ----------
 /** id -> {id, title, dest, driverId, driverName, status, createdAt, updatedAt, _offer?} */
 const orders = new Map();
+const refIndex = new Map();               // مرجع خارجي (رقم طلب التطبيق) -> معرّف داخلي — منع التكرار
 const driverToOrderId = new Map();        // driverId -> معرّف طلبه النشط (فهرس O(1))
 const ACTIVE = new Map();                 // معرّفات الطلبات النشطة فقط — تُبث كاملة للوحة
 const ORDER_RETAIN_MS = 5 * 60_000;       // يُحتفظ بالطلب المنتهي 5 دقائق ثم يُخلى
@@ -132,7 +133,7 @@ const statsFor = (off) => dailyStats.get(dateKey(off)) || { created: 0, delivere
 // إخلاء دوري: طلبات منتهية تجاوزت مدة الاحتفاظ + موصلون غير متصلين منذ يوم
 setInterval(() => {
   const now = Date.now();
-  for (const [id, o] of orders) if (o._evictAt && now > o._evictAt) orders.delete(id);
+  for (const [id, o] of orders) if (o._evictAt && now > o._evictAt) { if (o.ref) refIndex.delete(o.ref); orders.delete(id); }
   for (const [id, d] of drivers) if (!d.online && now - (d.lastSeen || 0) > OFFLINE_TTL_MS && !driverToOrderId.has(id)) { unindexDriver(id); drivers.delete(id); }
 }, 60_000).unref?.();
 
@@ -791,6 +792,50 @@ async function handleHttp(req, res) {
     // الطلبات النشطة ومساراتها — لصفحة الطلبات في غرفة التشغيل
     if (url.pathname === '/api/v1/orders' && req.method === 'GET')
       return json(200, { orders: activeOrdersList() });
+
+    // 🎙 جسر التطبيق ⟵ تاليا: غرفة التشغيل تدفع طلب التطبيق هنا فتتولاه الموزّعة فوراً
+    // {ref, title, dest:{lat,lng}} إنشاء (idempotent بالمرجع) · {ref, action:'cancelled'|'delivered'} مزامنة حالة
+    if (url.pathname === '/api/v1/dispatch' && req.method === 'POST') {
+      const b = await readBody(req);
+      const ref = b.ref != null ? String(b.ref).slice(0, 40) : null;
+      if (ref && b.action) {                                   // مزامنة حالة من التطبيق (إلغاء/تسليم خارجي)
+        const oid = refIndex.get(ref), o = oid && orders.get(oid);
+        if (!o) return json(404, { error: 'ref غير معروف' });
+        if (b.action === 'cancelled' && !TERMINAL.has(o.status)) {
+          cancelOffer(o);
+          const prev = o.driverId;
+          setOrder(o, { status: 'cancelled', offeredTo: null });
+          if (prev) pushDriverOrder(prev);
+          talyaFeed(`⚪ ${o.id}: أُلغي من تطبيق ديار (${ref}).`);
+        } else if (b.action === 'delivered' && !TERMINAL.has(o.status)) {
+          cancelOffer(o);
+          if (o.status === 'new') { setOrder(o, { status: 'cancelled', offeredTo: null }); talyaFeed(`⚪ ${o.id}: سُلّم خارج المنظومة (${ref}) — أُغلق.`); }
+          else { if (o.status === 'assigned') setOrder(o, { status: 'picked' });
+                 if (o.status === 'picked') setOrder(o, { status: 'delivered' });
+                 if (o.driverId) pushDriverOrder(o.driverId); }
+        }
+        return json(200, { ok: true, order: orderPublic(o) });
+      }
+      const lat = +b.dest?.lat, lng = +b.dest?.lng;
+      if (!b.title || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
+        return json(400, { error: 'title و dest{lat,lng} مطلوبة' });
+      if (ref && refIndex.has(ref)) {                          // نفس الطلب وصل مرتين — لا ازدواج
+        const ex = orders.get(refIndex.get(ref));
+        if (ex) return json(200, { ok: true, dedup: true, order: orderPublic(ex) });
+      }
+      if (ACTIVE.size >= 5000) return json(429, { error: 'حد الطلبات النشطة' });
+      const o = { id: 'ORD-' + (++orderSeq), ref, title: String(b.title).slice(0, 80),
+        dest: { lat, lng }, driverId: null, driverName: null,
+        status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
+        createdAt: Date.now(), updatedAt: Date.now() };
+      orders.set(o.id, o); ACTIVE.set(o.id, o);
+      if (ref) refIndex.set(ref, o.id);
+      statBump('created');
+      setOrder(o, {});
+      if (b.auto !== false) startDispatch(o);                  // 🧕 تاليا تعرضه على الأقرب فوراً
+      talyaFeed(`📲 ${o.id}: وصل من تطبيق ديار${ref ? ` (رقم ${ref})` : ''} — أتولاه الآن.`);
+      return json(200, { ok: true, order: orderPublic(o) });
+    }
 
     // إعلان من العقل إلى الأجهزة: {text, speak:true} — يظهر ويُنطق على جهاز الموصل
     if (url.pathname === '/api/v1/announce' && req.method === 'POST') {
