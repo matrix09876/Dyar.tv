@@ -154,7 +154,11 @@
 
     <div class="pane" id="p-orders">
       <button class="primary" id="newOrderBtn">＋ طلب جديد (انقر ثم حدد الوجهة على الخريطة)</button>
-      <div id="olist"><div class="empty">لا طلبات بعد.<br>أنشئ طلبًا وأسنده — يظهر مساره الفعلي على الخريطة مع الزمن والمسافة، ويصل للموصل على جهازه.</div></div>
+      <div style="display:flex;gap:6px;margin:6px 0">
+        <button class="ofilter active" data-f="active" style="flex:1;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--text);cursor:pointer">النشطة <span id="cntAct">0</span></button>
+        <button class="ofilter" data-f="closed" style="flex:1;padding:6px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--muted);cursor:pointer">المغلقة اليوم <span id="cntClosed">0</span></button>
+      </div>
+      <div id="olist"><div class="empty">لا طلبات بعد.<br>كل طلب — من لوحتك أو من تطبيق ديار — يظهر هنا بسجل تتبع كامل: أُنشئ ← عُرض ← قُبل ← استُلم ← سُلّم، مع الوقت واسم الموصل.</div></div>
     </div>
 
     <div class="pane" id="p-prio">
@@ -435,19 +439,47 @@
 
   // ================= لوحة الطلبات =================
   const stTxt = { new:'جديد', assigned:'مُسنَد', picked:'استُلم', delivered:'سُلِّم', cancelled:'ملغى' };
+  const closedM = new Map();                     // المغلقة اليوم — تبقى مرئية بسجلها الكامل
+  let orderFilter = 'active';
+  const hm = (t) => new Date(t).toLocaleTimeString('ar', { hour:'2-digit', minute:'2-digit' });
+  // 📜 خط التتبع: أُنشئ 10:50 ← مُسنَد أحمد 10:51 ← استُلم 10:53 ← سُلِّم 11:02
+  const timeline = (o) => (o.history || []).map(h =>
+    `${stTxt[h.st] || h.st}${h.d && h.st !== 'new' ? ' ' + esc(h.d) : (h.d ? ' (' + esc(h.d) + ')' : '')} ${hm(h.at)}`).join(' ◄ ');
+  document.querySelectorAll('.ofilter').forEach(b => b.onclick = () => {
+    orderFilter = b.dataset.f;
+    document.querySelectorAll('.ofilter').forEach(x => { const on = x === b; x.classList.toggle('active', on);
+      x.style.background = on ? 'var(--surface2)' : 'none'; x.style.color = on ? 'var(--text)' : 'var(--muted)'; });
+    renderOrders();
+  });
   function renderOrders() {
-    const arr = [...ordersM.values()].sort((a,b) => b.createdAt - a.createdAt);
-    $('cOrd').textContent = arr.filter(o => !['delivered','cancelled'].includes(o.status)).length;
-    if (!arr.length) return;
+    const act = [...ordersM.values()].sort((a,b) => b.createdAt - a.createdAt);
+    $('cOrd').textContent = act.length;
+    $('cntAct').textContent = act.length;
+    $('cntClosed').textContent = closedM.size;
+    if (orderFilter === 'closed') {
+      const cls = [...closedM.values()].sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+      $('olist').innerHTML = cls.length ? cls.map(o => `
+        <div class="order" style="opacity:.85">
+          <div class="top"><b class="num">${esc(o.id)}${o.ref ? ` <span style="color:var(--muted);font-size:11px">تطبيق #${esc(o.ref)}</span>` : ''}</b>
+            <span class="st ${o.status}">${stTxt[o.status]}</span></div>
+          <div>${esc(o.title)}</div>
+          <div class="meta">📜 ${timeline(o)}</div>
+          ${o.driverName ? `<div class="meta">🛵 ${esc(o.driverName)}</div>` : ''}
+        </div>`).join('') : '<div class="empty">لا طلبات مغلقة بعد اليوم.</div>';
+      return;
+    }
+    const arr = act;
+    if (!arr.length) { $('olist').innerHTML = '<div class="empty">لا طلبات نشطة الآن — الجديد يظهر فورًا من لوحتك أو من تطبيق ديار.</div>'; return; }
     $('olist').innerHTML = arr.map(o => {
       const done = ['delivered','cancelled'].includes(o.status);
       const r = routeCache.get(o.id);
       const cands = [...drivers.values()].filter(d => d.online && d.last)
         .map(d => ({ d, km: havKm(d.last, o.dest) })).sort((a,b) => a.km - b.km);
       return `<div class="order ${selectedOrder===o.id?'sel':''}" data-id="${o.id}">
-        <div class="top"><b class="num">${esc(o.id)}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
+        <div class="top"><b class="num">${esc(o.id)}${o.ref ? ` <span style="color:var(--muted);font-size:11px">تطبيق #${esc(o.ref)}</span>` : ''}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
         <div>${esc(o.title)}</div>
         <div class="meta">${o.driverName ? '🛵 ' + esc(o.driverName) : o.offeredTo ? '🧕 تاليا تعرضه على ' + esc(o.offeredTo) + '…' : 'بلا موصل'} · ${age(o.createdAt)}</div>
+        ${(o.history || []).length > 1 ? `<div class="meta">📜 ${timeline(o)}</div>` : ''}
         ${!done && o.driverId && (o.etaMin || r) ? `<div class="eta num" ${o.riskLate ? 'style="color:var(--alert);font-weight:700"' : ''}>
           ${o.riskLate ? '🔶 خطر تأخير — ' : ''}⏱ الوصول بعد ${o.etaMin || Math.ceil(r.min)} د بالطريق${r ? ` · 🛣 ${r.km.toFixed(1)} كم` : ''}</div>` : ''}
         ${!done ? `<div class="acts">
@@ -525,7 +557,8 @@
       const m = JSON.parse(e.data);
       if (m.t === 'snapshot') {
         for (const d of m.drivers) { const old = drivers.get(d.id); drivers.set(d.id, { ...old, ...d }); }
-        (m.orders || []).forEach(o => ordersM.set(o.id, o));
+        ordersM.clear(); (m.orders || []).forEach(o => ordersM.set(o.id, o));
+        (m.closed || []).forEach(o => closedM.set(o.id, o));
         prsM.clear(); (m.priorities || []).forEach(p => prsM.set(p.id, p)); renderPrio();
       }
       else if (m.t === 'priority') {
@@ -539,8 +572,11 @@
       else if (m.t === 'presence') { const d = drivers.get(m.id); if (d) { d.online = m.online; d.lastSeen = m.lastSeen; } }
       else if (m.t === 'orders') { for (const o of m.orders) ordersM.set(o.id, o); for (const o of m.orders) upsertDestMarker(o); }
       else if (m.t === 'order_upd') {                        // تحديث طلب مفرد (كفؤ عند الحِمل)
-        const o = m.order; ordersM.set(o.id, o); upsertDestMarker(o);
-        if (['delivered','cancelled'].includes(o.status)) setTimeout(() => { ordersM.delete(o.id); renderOrders(); }, 8000);
+        const o = m.order; upsertDestMarker(o);
+        if (['delivered','cancelled'].includes(o.status)) {   // المغلق ينتقل لقائمة «المغلقة اليوم» — لا يختفي
+          ordersM.delete(o.id); closedM.set(o.id, o);
+          if (closedM.size > 100) closedM.delete(closedM.keys().next().value);
+        } else ordersM.set(o.id, o);
       }
       else if (m.t === 'device_removed') { const d = drivers.get(m.id); d?.marker?.remove(); drivers.delete(m.id); if (selected === m.id) selected = null; }
       else if (m.t === 'voice') { feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);

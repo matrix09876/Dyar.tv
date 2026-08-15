@@ -100,11 +100,18 @@ function reindexOrder(o, prevDriverId) {
   }
 }
 
+const closedOrders = [];                  // آخر 100 طلب مغلق (اليوم) — للوحة «المغلقة» بسجلها الكامل
 function setOrder(o, patch) {
   const prevDriver = o.driverId, prevStatus = o.status;
   Object.assign(o, patch, { updatedAt: Date.now() });
+  if (o.status !== prevStatus) {                                 // 📜 سجل تتبع كامل: من فعل ماذا ومتى
+    (o.history ||= []).push({ st: o.status, at: Date.now(), d: o.driverName || null });
+    if (o.history.length > 15) o.history.shift();
+  }
   if (o.status !== prevStatus && (o.status === 'new' || TERMINAL.has(o.status))) o.riskLate = false;   // زال خطر التأخير بزوال الرحلة
   if (o.status !== prevStatus && TERMINAL.has(o.status)) {
+    closedOrders.push(orderPublic(o));
+    if (closedOrders.length > 100) closedOrders.shift();
     statBump(o.status);                                          // إحصاء يومي عند الإغلاق
     if (o.status === 'cancelled') {                              // نمط إلغاءات متكرر ← أولوية مراجعة
       const c = statsFor(0).cancelled;
@@ -855,6 +862,7 @@ async function handleHttp(req, res) {
       const o = { id: 'ORD-' + (++orderSeq), ref, title: String(b.title).slice(0, 80),
         dest: { lat, lng }, driverId: null, driverName: null,
         status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
+        history: [{ st: 'new', at: Date.now(), d: 'التطبيق' }],
         createdAt: Date.now(), updatedAt: Date.now() };
       orders.set(o.id, o); ACTIVE.set(o.id, o);
       if (ref) refIndex.set(ref, o.id);
@@ -920,7 +928,7 @@ wss.on('connection', (ws) => {
     if (hello.role === 'ops') {
       opsClients.add(ws);
       send(ws, { t: 'snapshot', drivers: [...drivers.values()].map(publicInfo), orders: activeOrdersList(),
-        priorities: openPriorities(), staff: STAFF });
+        closed: closedOrders.slice(-30), priorities: openPriorities(), staff: STAFF });
       ws.on('message', (raw2) => {
         let m; try { m = JSON.parse(raw2); } catch { return; }
         if (handleShared(m, hello.name || 'العمليات', 'ops', ws)) return;
@@ -968,6 +976,7 @@ wss.on('connection', (ws) => {
           const o = { id: 'ORD-' + (++orderSeq), title: String(m.title).slice(0, 80),
             dest: { lat: +m.dest.lat, lng: +m.dest.lng }, driverId: null, driverName: null,
             status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
+            history: [{ st: 'new', at: Date.now(), d: null }],
             createdAt: Date.now(), updatedAt: Date.now() };
           orders.set(o.id, o);
           ACTIVE.set(o.id, o);
