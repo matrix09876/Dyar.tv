@@ -107,6 +107,28 @@
   #gate button{margin-top:2vh; width:100%; padding:1.7vh; font-size:2.1vh; font-weight:800; color:#fff;
                background:var(--accent); border:none; border-radius:1.4vh; cursor:pointer}
   #gateErr{color:var(--alert); font-size:1.75vh; margin-top:1.3vh; min-height:2vh}
+
+  /* ===== 🛰 HUD متقدم: شبكة خلفية، حلقات دوّارة، موجة صوتية، اتجاهات، إضاءة الوقت ===== */
+  #hudGrid{position:fixed; inset:0; pointer-events:none; z-index:0; opacity:.05;
+    background-image:linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px);
+    background-size:4vh 4vh}
+  #orb::before,#orb::after{content:''; position:absolute; border-radius:50%; pointer-events:none}
+  #orb::before{inset:-1.6vh; border:2px dashed rgba(226,67,46,.4); animation:spin 14s linear infinite}
+  #orb::after{inset:-3vh; border:2px solid transparent; border-top-color:rgba(226,67,46,.55);
+              border-bottom-color:rgba(226,67,46,.2); animation:spin 7s linear infinite reverse}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  body.listening #orb::before{border-color:rgba(63,191,119,.5)}
+  body.listening #orb::after{border-top-color:rgba(63,191,119,.8); border-bottom-color:rgba(63,191,119,.25); animation-duration:2.6s}
+  body.thinking #orb::before{border-color:rgba(77,163,255,.5)}
+  body.thinking #orb::after{border-top-color:rgba(77,163,255,.85); border-bottom-color:rgba(77,163,255,.25); animation-duration:1.2s}
+  body.speaking #orb::after{animation-duration:3s}
+  #viz{width:min(46vh,90%); height:4.6vh; flex:none; opacity:.9}
+  .kpi{position:relative; overflow:hidden}
+  .kpi .spark{position:absolute; left:0; right:0; bottom:0; width:100%; height:1.9vh; opacity:.5; pointer-events:none}
+  body.mode-warn{box-shadow:inset 0 0 9vh rgba(226,164,60,.18)}
+  body.amb-eve{background:radial-gradient(1200px 700px at 50% -10%, #1c1626 0%, var(--bg) 60%)}
+  body.amb-night{background:radial-gradient(1200px 700px at 50% -10%, #0e1420 0%, #090b10 60%)}
+
   .hidden{display:none !important}
 </style>
 </head>
@@ -123,6 +145,7 @@
 </div>
 
 <div id="alertBar">⚠ OPERATIONAL ATTENTION REQUIRED — تنبيه تشغيلي عاجل</div>
+<div id="hudGrid"></div>
 
 <header>
   <div class="brand">
@@ -168,6 +191,7 @@
       </svg>
     </div>
     <div id="orbState">أنا منتبه دائماً — تكلم مباشرة أو قل «يا ديار»</div>
+    <canvas id="viz" width="600" height="46"></canvas>
     <div id="answer"><span class="who">عقل ديار</span><span id="answerText">أهلاً بكم في غرفة عمليات ديار. قولوا «يا ديار» ثم اسألوا: كم طلبية أمس؟ ما المشاكل؟ شو عندي؟ ما برنامج اليوم؟</span></div>
     <div id="asOf"></div>
   </section>
@@ -376,6 +400,7 @@ function renderSummary(s) {
   $('#aiBadge').textContent = (s.wx ? `🌦 ${s.wx.t}°${s.wx.rain >= 30 ? ` · مطر ${s.wx.rain}%` : ''} — ` : '')
     + (s.ai ? '⚡ عقل كلاودي + بوابة أدوات' : '⚙ الاستدلال المحلي الفوري');
   if (s.prOpen) syncPriorities(s.prOpen, true);
+  trendPush(s);
 }
 
 /* ===== الأولويات الحية ===== */
@@ -407,6 +432,7 @@ function renderPriorities() {
   setKpi('#kRisk', counts.P0 + counts.P1, undefined, counts.P0 + counts.P1 ? 'bad' : 'good');
   setKpi('#kPrio', list.length, undefined, list.length > 5 ? 'warn' : '');
   document.body.classList.toggle('mode-p0', counts.P0 > 0);
+  document.body.classList.toggle('mode-warn', !counts.P0 && counts.P1 > 0);
   if (!list.length) { $('#priosList').innerHTML = '<div id="prioEmpty">🟢 لا أولويات مفتوحة — التشغيل مستقر</div>'; return; }
   $('#priosList').innerHTML = list.slice(0, 9).map(p => `
     <div class="pr ${p.ackAt ? 'acked' : ''} ${p.escalationLevel ? 'esc' : ''}" data-id="${esc(p.id)}">
@@ -515,6 +541,56 @@ const ticker = document.createElement('div');
 ticker.style.cssText = 'position:fixed;bottom:9vh;right:0;left:0;text-align:center;color:#98a1b4;font-size:1.7vh;padding:0 3vw;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;opacity:.85';
 document.body.appendChild(ticker);
 function tickerAdd(text) { ticker.textContent = text; clearTimeout(tickerAdd._t); tickerAdd._t = setTimeout(() => ticker.textContent = '', 25_000); }
+
+/* ===== 🛰 HUD متقدم: موجة حية + اتجاهات المؤشرات + إضاءة حسب الوقت ===== */
+// موجة تركيبية آمنة تعكس حالة العقل (يسمع/يفكر/يتكلم) — لا تعترض مسار الصوت الحقيقي إطلاقاً
+(() => {
+  const cv = document.getElementById('viz'); if (!cv) return;
+  const cx = cv.getContext('2d'); const N = 28; const amp = new Array(N).fill(0.05);
+  function frame(ts) {
+    const t = ts / 1000; const b = document.body.classList;
+    const st = b.contains('speaking') ? 'sp' : b.contains('thinking') ? 'th' : b.contains('listening') ? 'li' : 'id';
+    const col = st === 'sp' ? '#e2432e' : st === 'th' ? '#4da3ff' : st === 'li' ? '#3fbf77' : '#2b3245';
+    for (let i = 0; i < N; i++) {
+      const ph = i * 0.55;
+      const target = st === 'sp' ? 0.25 + 0.7 * Math.abs(Math.sin(t * 7 + ph) * Math.sin(t * 2.3 + ph * 1.7))
+        : st === 'li' ? 0.15 + 0.4 * Math.abs(Math.sin(t * 3 - ph * 0.6))
+        : st === 'th' ? (Math.abs(((t * 10) % N) - i) < 2 ? 0.8 : 0.08)
+        : 0.05 + 0.03 * Math.sin(t * 1.2 + ph);
+      amp[i] += (target - amp[i]) * 0.25;
+    }
+    const W = cv.width, H = cv.height, bw = W / N;
+    cx.clearRect(0, 0, W, H); cx.fillStyle = col;
+    for (let i = 0; i < N; i++) { const h = Math.max(2, amp[i] * H); cx.fillRect(i * bw + bw * 0.22, (H - h) / 2, bw * 0.56, h); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+// اتجاهات المؤشرات: عينة مع كل ملخص ⟵ خط شرارة داخل البطاقة (محفوظ عبر localStorage لآخر 6 ساعات)
+const TREND_KEYS = [['#kActive','a','#e2a43c'], ['#kOnline','o','#3fbf77'], ['#kDone','d','#4da3ff']];
+for (const [sel] of TREND_KEYS) { const el = $(sel);
+  if (el && !el.querySelector('.spark')) { const c = document.createElement('canvas'); c.className = 'spark'; c.width = 120; c.height = 22; el.appendChild(c); } }
+function trendPush(s) { try {
+  const tr = JSON.parse(localStorage.getItem('kiosk_trend') || '{}');
+  const pt = { a: s.active | 0, o: s.online | 0, d: (s.today && s.today.delivered) | 0, t: Date.now() };
+  const list = (tr.list || []).filter(x => Date.now() - x.t < 6 * 3600_000);
+  if (!list.length || Date.now() - list[list.length - 1].t > 90_000) list.push(pt); else list[list.length - 1] = pt;
+  tr.list = list.slice(-48); localStorage.setItem('kiosk_trend', JSON.stringify(tr));
+  for (const [sel, k, col] of TREND_KEYS) {
+    const c = $(sel + ' .spark'); if (!c) continue;
+    const g = c.getContext('2d'); g.clearRect(0, 0, c.width, c.height);
+    const vals = tr.list.map(x => x[k] | 0); const mx = Math.max(1, ...vals);
+    g.strokeStyle = col; g.lineWidth = 2; g.beginPath();
+    vals.forEach((v, i) => { const x = vals.length < 2 ? c.width : i * (c.width / (vals.length - 1));
+      const y = c.height - 2 - (v / mx) * (c.height - 4); i ? g.lineTo(x, y) : g.moveTo(x, y); });
+    g.stroke();
+  }
+} catch {} }
+// إضاءة حسب وقت اليوم: مساءً أدفأ وليلاً أدكن — راحة للعين في غرفة العمليات
+function setAmbience() { const h = new Date().getHours();
+  document.body.classList.toggle('amb-night', h >= 21 || h < 6);
+  document.body.classList.toggle('amb-eve', h >= 17 && h < 21); }
+setAmbience(); setInterval(setAmbience, 60_000);
 
 /* ===== فهم الجملة ===== */
 async function handleUtterance(raw) {
