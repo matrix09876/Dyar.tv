@@ -1044,7 +1044,10 @@ async function handleHttp(req, res) {
 
   if (req.method === 'OPTIONS') return json(204, {});
   if (url.pathname === '/api/health')
-    return json(200, { ok: true, drivers: drivers.size, online: onlineCount() });
+    return json(200, { ok: true, drivers: drivers.size, online: onlineCount(),
+      // تشخيص الرموز بلا كشف قيمها: أي متغير بيئة هو الفعّال للوحة/الأجهزة
+      pins: { opsPinSet: Boolean(process.env.OPS_PIN), driverPinSet: Boolean(process.env.DYAR_PIN),
+              panelUses: process.env.OPS_PIN ? 'OPS_PIN' : process.env.DYAR_PIN ? 'DYAR_PIN' : 'الافتراضي 1234' } });
   if (url.pathname === '/api/config')
     return json(200, { brainPanelUrl: BRAIN_PANEL_URL, hexKm: HEX_KM });
 
