@@ -672,8 +672,13 @@ const EXEC_TOOLS = {
     fn: () => ({ load: teamLoad(), staff: STAFF }) },
   getLiveIndex: { desc: 'الفهرس الجغرافي الحي (نمط H3): الخلايا السداسية وعدد الموصلين المتصلين في كل خلية — يكشف فجوات التغطية',
     fn: () => ({ asOf: Date.now(), cellKm: HEX_KM, cells: liveIndex() }) },
-  getOrder: { desc: 'تفاصيل طلب واحد بمعرّفه (مثل ORD-123456)', params: { orderId: 'معرّف الطلب' },
-    fn: ({ orderId }) => { const o = orders.get(String(orderId || '').trim()); return o ? orderPublic(o) : { error: 'لا يوجد طلب بهذا المعرّف' }; } },
+  getOrder: { desc: 'تفاصيل طلب واحد بمعرّفه الداخلي (ORD-123456) أو برقم التطبيق (مثل 5802) — يشمل المغلقة اليوم',
+    params: { orderId: 'المعرّف الداخلي أو رقم التطبيق' },
+    fn: ({ orderId }) => { const q = String(orderId || '').trim();
+      const byId = (x) => x.ref === q || String(x.id || '').endsWith(q);
+      const o = orders.get(q) || orders.get(refIndex.get(q)) || [...orders.values()].find(byId)
+        || [...closedOrders].reverse().find(byId);
+      return o ? orderPublic(o) : { error: 'لا يوجد طلب بهذا المعرّف/الرقم عندي اليوم' }; } },
   getDriver: { desc: 'تفاصيل موصل واحد بمعرّفه أو اسمه: حالته وموقعه وطلبه الجاري', params: { driver: 'المعرّف أو الاسم' },
     fn: ({ driver }) => { const q = String(driver || '').trim();
       const d = drivers.get(q) || [...drivers.values()].find(x => x.name === q);
@@ -727,6 +732,23 @@ function brainAnswer(q, s, staff) {
   const has = (...ws) => ws.some(w => t.includes(w));
   const y = s.yesterday, d = s.today;
   const fmtPr = (x, i) => `${i + 1}) ${x.severity} ${x.title}${x.recommendedAction ? ` — ${x.recommendedAction}` : ''}`;
+  // 🔎 سؤال عن طلب محدد بالرقم: «شو حالة طلب 5802؟» — بحث بالمرجع (رقم التطبيق) أو المعرّف الداخلي
+  const mRef = t.match(/(?:طلب|طلبيه|اوردر|order)[^\d]{0,6}(\d{3,})/) || (has('حاله', 'وين', 'مين اخذ') ? t.match(/(\d{4,})/) : null);
+  if (mRef) {
+    const ref = mRef[1];
+    const byId = (x) => x.ref === ref || String(x.id || '').endsWith(ref);
+    const o = orders.get(refIndex.get(ref)) || [...orders.values()].find(byId)
+      || [...closedOrders].reverse().find(byId);
+    if (!o) return `لا أجد طلباً بالرقم ${ref} عندي اليوم — إن كان من التطبيق فلم يصلني عبر الجسر ` +
+      `(تحققوا من Webhooks لوحة التطبيق) أو أُغلق قبل أكثر من يوم فخرج من ذاكرتي القصيرة.`;
+    const stAr = { new: 'جديد بانتظار الإسناد', assigned: 'مُسنَد', picked: 'قيد التوصيل', delivered: 'سُلِّم ✓', cancelled: 'أُلغي' };
+    const hm = (ts) => new Date(ts).toLocaleTimeString('ar', { hour: '2-digit', minute: '2-digit' });
+    const tl = (o.history || []).map(h => `${stAr[h.st] || h.st}${h.d ? ' (' + h.d + ')' : ''} ${hm(h.at)}`).join('، ثم ');
+    return `الطلب ${o.ref ? 'رقم ' + o.ref + ' — ' + o.id : o.id}: ${o.title}. ` +
+      `حالته الآن: ${o.extDelivered ? 'سُلِّم من التطبيق خارج منظومة اللاسلكي ✓' : (stAr[o.status] || o.status)}${o.driverName ? ' مع ' + o.driverName : ''}` +
+      `${o.etaMin && !TERMINAL.has(o.status) ? `، والوصول المتوقع بعد ${o.etaMin} د` : ''}. ` +
+      (tl ? `السجل: ${tl}.` : '');
+  }
   if (has('شو عندي', 'ماذا اعمل', 'ماذا افعل', 'مهامي', 'وش اسوي')) {          // طابور مهام الموظف
     const mine = (s.prOpen || []).filter(x => !staff || !x.assignedTo || staff.includes(x.assignedTo) || x.assignedTo.includes(staff));
     return mine.length
@@ -887,7 +909,7 @@ async function handleHttp(req, res) {
           talyaFeed(`⚪ ${o.id}: أُلغي من تطبيق ديار (${ref}).`);
         } else if (b.action === 'delivered' && !TERMINAL.has(o.status)) {
           cancelOffer(o);
-          if (o.status === 'new') { setOrder(o, { status: 'cancelled', offeredTo: null }); talyaFeed(`⚪ ${o.id}: سُلّم خارج المنظومة (${ref}) — أُغلق.`); }
+          if (o.status === 'new') { o.extDelivered = true; setOrder(o, { status: 'cancelled', offeredTo: null }); talyaFeed(`⚪ ${o.id}: سُلّم خارج المنظومة (${ref}) — أُغلق.`); }
           else { if (o.status === 'assigned') setOrder(o, { status: 'picked' });
                  if (o.status === 'picked') setOrder(o, { status: 'delivered' });
                  if (o.driverId) pushDriverOrder(o.driverId); }
