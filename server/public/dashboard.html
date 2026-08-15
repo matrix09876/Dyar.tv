@@ -813,6 +813,7 @@
   async function pollSummary() {                          // مؤشرات اليوم والهدف في الشريط العلوي
     try {
       const r = await fetch('/api/brain/summary', { headers: { 'x-kiosk-pin': pin } });
+      if (r.status === 401) { sessionStorage.removeItem('pin'); pin = ''; askPin('رمز اللوحة تغيّر — أدخل الرمز الجديد'); return; }
       if (!r.ok) return;
       const s = await r.json();
       $('cToday').textContent = s.today.created;
@@ -855,7 +856,14 @@
       if (!('serviceWorker' in navigator) || !('PushManager' in window)) return alert('هذا المتصفح لا يدعم التنبيهات — استعمل Chrome على أندرويد، أو Safari 16.4+ بعد «إضافة للشاشة الرئيسية» على iPhone.');
       const reg = await navigator.serviceWorker.register('/sw.js');
       if ((await Notification.requestPermission()) !== 'granted') return alert('يجب السماح بالتنبيهات من إعدادات المتصفح.');
-      const { key } = await (await fetch('/api/push/key', { headers: { 'x-kiosk-pin': pin } })).json();
+      const kr = await fetch('/api/push/key', { headers: { 'x-kiosk-pin': pin } });
+      if (kr.status === 401) {                                  // الرمز تغيّر بعد فتح الصفحة — أعد إدخاله
+        sessionStorage.removeItem('pin'); pin = '';
+        askPin('رمز اللوحة تغيّر — أدخل الرمز الجديد ثم أعد الضغط على 🔔');
+        return;
+      }
+      const { key, error } = await kr.json();
+      if (!key) throw new Error(error || 'الخادم لم يرجع مفتاحاً — حدّث الصفحة وحاول ثانية');
       const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(key) });
       const j = await (await fetch('/api/push/subscribe', { method: 'POST', headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ pin, sub }) })).json();
@@ -863,7 +871,7 @@
       await fetch('/api/push/test', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ pin }) });
       $('pushBtn').textContent = '🔔 مفعّلة ✓';
       alert('تم! أرسلت تنبيه فحص الآن — من هذه اللحظة: كل P0/P1 وتصعيد بلا استلام وإحاطة يومية تصلك هنا حتى والمتصفح مغلق.');
-    } catch (e) { alert('تعذر التفعيل: ' + e.message); }
+    } catch (e) { alert('تعذر التفعيل: ' + (e.message || e)); }
   };
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
 
