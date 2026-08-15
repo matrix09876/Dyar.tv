@@ -80,6 +80,17 @@
 
   /* ===== الخريطة ===== */
   .marker{width:16px; height:16px; border-radius:50%; border:2.5px solid #fff; box-shadow:0 1px 6px rgba(0,0,0,.5); cursor:pointer}
+  .heading{position:absolute; top:-11px; left:50%; margin-left:-5px; width:0; height:0; display:none;
+           border-left:5px solid transparent; border-right:5px solid transparent; border-bottom:9px solid #fff;
+           filter:drop-shadow(0 1px 2px rgba(0,0,0,.6)); transform-origin:50% 19px}
+  .store-marker{font-size:22px; cursor:pointer; filter:drop-shadow(0 2px 4px rgba(0,0,0,.5)); position:relative}
+  .store-marker .scount{position:absolute; top:-6px; inset-inline-end:-8px; background:var(--accent); color:#fff;
+           font-size:10px; font-weight:700; border-radius:99px; padding:0 4px; min-width:14px; text-align:center; display:none}
+  .store-pop{font-family:inherit; direction:rtl; font-size:12.5px; color:#1a1f2b; min-width:170px}
+  .store-pop b{font-size:13.5px}
+  .store-pop .r{display:flex; justify-content:space-between; gap:10px; margin-top:3px}
+  .store-pop .acts{display:flex; gap:5px; margin-top:7px}
+  .store-pop .acts button{flex:1; font:inherit; font-size:11.5px; padding:3px; border:1px solid #ccc; border-radius:6px; background:#f4f4f6; cursor:pointer}
   .mlabel{position:absolute; top:18px; right:50%; transform:translateX(50%); white-space:nowrap; font-size:11px;
           font-weight:700; color:#111; background:rgba(255,255,255,.92); padding:1px 7px; border-radius:6px;
           box-shadow:0 1px 4px rgba(0,0,0,.35)}
@@ -127,6 +138,7 @@
     <span class="chip"><span class="dot" style="background:var(--offline)"></span><span class="num" id="cOff">0</span> غير متصل</span>
     <button id="talkBtn" title="اضغط مطولًا للتحدث لكل الأجهزة">🎙 تحدث</button>
     <button id="addBtn">➕ جهاز</button>
+    <button id="addStoreBtn" title="انقر ثم حدد موقع المتجر على الخريطة">🏪 متجر</button>
     <a id="brainLink" target="_blank" rel="noopener"
        style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">🧠 العقل</a>
     <a href="/kiosk.html" target="_blank" rel="noopener"
@@ -327,8 +339,10 @@
     const moved = cached ? havKm({lat: cached.from[1], lng: cached.from[0]}, d.last) : 9;
     if (cached && !force && moved < 0.12 && Date.now() - cached.at < 30000) return cached;
     const from = [d.last.lng, d.last.lat], to = [o.dest.lng, o.dest.lat];
+    // قبل الاستلام والمتجر معروف: مسار برجلين موصل ← 🏪 متجر ← 📍 زبون (نمط Uber)
+    const via = (o.status === 'assigned' && o.origin) ? [[o.origin.lng, o.origin.lat]] : [];
     try {
-      const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${from.join(',')};${to.join(',')}?overview=full&geometries=geojson`,
+      const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${[from, ...via, to].map(p => p.join(',')).join(';')}?overview=full&geometries=geojson`,
         { signal: AbortSignal.timeout(6000) });
       const j = await r.json();
       const rt = j.routes?.[0];
@@ -336,9 +350,11 @@
       const out = { geometry: rt.geometry, km: rt.distance/1000, min: rt.duration/60, from, at: Date.now() };
       routeCache.set(o.id, out); return out;
     } catch {
-      // تعذر التوجيه — خط مستقيم وتقدير 30 كم/س حتى يعود
-      const km = havKm(d.last, o.dest);
-      const out = { geometry: { type:'LineString', coordinates: [from, to] }, km, min: km/30*60, from, at: Date.now(), approx: true };
+      // تعذر التوجيه — خطوط مستقيمة عبر نقاط الرحلة وتقدير 30 كم/س حتى يعود
+      const pts = [from, ...via, to];
+      let km = 0; for (let i = 0; i < pts.length - 1; i++)
+        km += havKm({ lat: pts[i][1], lng: pts[i][0] }, { lat: pts[i+1][1], lng: pts[i+1][0] });
+      const out = { geometry: { type:'LineString', coordinates: pts }, km, min: km/30*60, from, at: Date.now(), approx: true };
       routeCache.set(o.id, out); return out;
     }
   }
@@ -348,23 +364,86 @@
   }, 10000);
 
   // ================= علامات الخريطة =================
+  // انزلاق سلس بين نبضتي GPS (بلا قفزات — مثل Uber/Careem) مع سهم اتجاه السير
+  function glide(marker, to, ms = 900) {
+    const from = marker.getLngLat(), t0 = performance.now();
+    if (Math.abs(from.lng - to[0]) < 1e-7 && Math.abs(from.lat - to[1]) < 1e-7) return;
+    cancelAnimationFrame(marker._raf);
+    const step = (t) => {
+      const k = Math.min(1, (t - t0) / ms), e2 = k * (2 - k);   // تخفيف حركة طبيعي
+      marker.setLngLat([from.lng + (to[0] - from.lng) * e2, from.lat + (to[1] - from.lat) * e2]);
+      if (k < 1) marker._raf = requestAnimationFrame(step);
+    };
+    marker._raf = requestAnimationFrame(step);
+  }
   function upsertMarker(d) {
     if (!d.last || !map) return;
     if (!d.marker) {
       const el = document.createElement('div');
-      el.innerHTML = '<div class="marker"></div><div class="mlabel"></div>';
+      el.innerHTML = '<div class="heading"></div><div class="marker"></div><div class="mlabel"></div>';
       el.style.position = 'relative';
       el.addEventListener('click', e => { e.stopPropagation(); selectDriver(d.id, true); });
       d.marker = new maplibregl.Marker({ element: el }).setLngLat([d.last.lng, d.last.lat]).addTo(map);
       d.el = el;
     }
-    d.marker.setLngLat([d.last.lng, d.last.lat]);
+    glide(d.marker, [d.last.lng, d.last.lat]);
     const busy = activeOrderOf(d.id);
     d.el.querySelector('.marker').style.background =
       d.sos ? 'var(--alert)' : !d.online ? 'var(--offline)' : busy ? 'var(--busy)' : 'var(--online)';
+    const hd = d.el.querySelector('.heading');                   // سهم الاتجاه يظهر أثناء الحركة فقط
+    if (d.online && d.last.hdg != null && (d.last.spd || 0) > 3) {
+      hd.style.display = 'block'; hd.style.transform = `rotate(${d.last.hdg}deg)`;
+    } else hd.style.display = 'none';
     // textContent آمن ضد الحقن — لا innerHTML هنا
-    d.el.querySelector('.mlabel').textContent = d.name + (busy ? ' · ' + busy.id : '') + (d.last.acc ? ' ±' + d.last.acc + 'م' : '');
+    d.el.querySelector('.mlabel').textContent = d.name + (busy ? ' · ' + busy.id : '')
+      + (d.last.spd > 3 ? ' · ' + d.last.spd + ' كم/س' : '') + (d.last.acc ? ' ±' + d.last.acc + 'م' : '');
     if ($('tFollow').checked && selected === d.id) map.easeTo({ center: [d.last.lng, d.last.lat], duration: 800 });
+  }
+
+  // ================= 🏪 المتاجر: علامات + مراقب حي لكل متجر =================
+  const storesM = new Map();               // id -> {store, marker, el}
+  const storeStats = (id) => {             // إحصاء حي من طلبات اليوم المرتبطة بالمتجر
+    const act = [...ordersM.values()].filter(o => o.storeId === id);
+    const done = [...closedM.values()].filter(o => o.storeId === id && o.status === 'delivered');
+    const mins = done.map(o => { const h = o.history || []; const a = h.find(x => x.st === 'new'), b = h.find(x => x.st === 'delivered');
+      return a && b ? (b.at - a.at) / 60000 : null; }).filter(Number.isFinite);
+    return { active: act.length, delivered: done.length,
+      avgMin: mins.length ? Math.round(mins.reduce((x, y) => x + y, 0) / mins.length) : null };
+  };
+  function upsertStore(s) {
+    let rec = storesM.get(s.id);
+    if (!rec) {
+      const el = document.createElement('div');
+      el.className = 'store-marker'; el.innerHTML = '🏪<span class="scount"></span>';
+      el.addEventListener('click', ev => { ev.stopPropagation(); openStorePop(s.id); });
+      const marker = new maplibregl.Marker({ element: el, anchor: 'bottom' }).setLngLat([s.lng, s.lat]).addTo(map);
+      rec = { store: s, marker, el }; storesM.set(s.id, rec);
+    }
+    rec.store = s; rec.el.title = s.name;
+    refreshStoreBadges();
+  }
+  function refreshStoreBadges() {          // شارة عدد الطلبات النشطة فوق كل متجر
+    for (const rec of storesM.values()) {
+      const n = storeStats(rec.store.id).active;
+      const b = rec.el.querySelector('.scount');
+      b.style.display = n ? 'block' : 'none'; b.textContent = n;
+    }
+  }
+  function openStorePop(id) {
+    const rec = storesM.get(id); if (!rec) return;
+    const st = storeStats(id), s = rec.store;
+    const div = document.createElement('div');
+    div.className = 'store-pop';
+    div.innerHTML = `<b>🏪 ${esc(s.name)}</b>
+      <div class="r"><span>طلبات نشطة الآن</span><b>${st.active}</b></div>
+      <div class="r"><span>سُلِّم اليوم</span><b>${st.delivered}</b></div>
+      <div class="r"><span>متوسط زمن التوصيل</span><b>${st.avgMin != null ? st.avgMin + ' د' : '—'}</b></div>
+      <div class="acts"><button data-a="rename">✏️ تسمية</button><button data-a="remove">🗑 حذف</button></div>`;
+    div.querySelector('[data-a="rename"]').onclick = () => { const n = (prompt('الاسم الجديد:', s.name) || '').trim();
+      if (n) ws.send(JSON.stringify({ t: 'store_rename', id, name: n })); popup.remove(); };
+    div.querySelector('[data-a="remove"]').onclick = () => { if (confirm('حذف المتجر «' + s.name + '» من الخريطة؟'))
+      ws.send(JSON.stringify({ t: 'store_remove', id })); popup.remove(); };
+    const popup = new maplibregl.Popup({ offset: 26, closeButton: true }).setLngLat([s.lng, s.lat]).setDOMContent(div).addTo(map);
   }
   function upsertDestMarker(o) {
     if (!map) return;
@@ -522,12 +601,20 @@
     renderOrders(); redrawLayers();
   }
 
-  // إنشاء طلب: زر ← نقرة خريطة ← حوار
-  $('newOrderBtn').onclick = () => { picking = true; $('pickHint').style.display = 'block'; };
-  document.addEventListener('keydown', e => { if (e.key === 'Escape') { picking = false; $('pickHint').style.display = 'none'; } });
+  // إنشاء طلب/متجر: زر ← نقرة خريطة ← حوار
+  let placingStore = false;
+  $('newOrderBtn').onclick = () => { placingStore = false; picking = true; $('pickHint').textContent = 'انقر على الخريطة لتحديد وجهة الطلب — Esc للإلغاء'; $('pickHint').style.display = 'block'; };
+  $('addStoreBtn').onclick = () => { placingStore = true; picking = true; $('pickHint').textContent = '🏪 انقر موقع المتجر على الخريطة — Esc للإلغاء'; $('pickHint').style.display = 'block'; };
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') { picking = false; placingStore = false; $('pickHint').style.display = 'none'; } });
   function onMapClick(e) {
     if (!picking) return;
     picking = false; $('pickHint').style.display = 'none';
+    if (placingStore) {                                          // 🏪 متجر جديد بالموقع المنقور
+      placingStore = false;
+      const name = (prompt('اسم المتجر (كما يظهر في عناوين الطلبات — للربط الآلي):') || '').trim();
+      if (name) ws.send(JSON.stringify({ t: 'store_add', name, lat: e.lngLat.lat, lng: e.lngLat.lng }));
+      return;
+    }
     pickedDest = { lat: e.lngLat.lat, lng: e.lngLat.lng };
     $('ordDest').textContent = 'الوجهة: ' + pickedDest.lat.toFixed(5) + ' , ' + pickedDest.lng.toFixed(5);
     $('ordTitle').value = '';
@@ -559,8 +646,11 @@
         for (const d of m.drivers) { const old = drivers.get(d.id); drivers.set(d.id, { ...old, ...d }); }
         ordersM.clear(); (m.orders || []).forEach(o => ordersM.set(o.id, o));
         (m.closed || []).forEach(o => closedM.set(o.id, o));
+        (m.stores || []).forEach(s => upsertStore(s));
         prsM.clear(); (m.priorities || []).forEach(p => prsM.set(p.id, p)); renderPrio();
       }
+      else if (m.t === 'store') upsertStore(m.s);
+      else if (m.t === 'store_removed') { const r = storesM.get(m.id); r?.marker?.remove(); storesM.delete(m.id); }
       else if (m.t === 'priority') {
         if (PR_OPEN_ST.has(m.p.status)) { if (!prsM.has(m.p.id) && ['P0','P1'].includes(m.p.severity)) sosSound(); prsM.set(m.p.id, m.p); }
         else prsM.delete(m.p.id);
@@ -577,6 +667,7 @@
           ordersM.delete(o.id); closedM.set(o.id, o);
           if (closedM.size > 100) closedM.delete(closedM.keys().next().value);
         } else ordersM.set(o.id, o);
+        refreshStoreBadges();
       }
       else if (m.t === 'device_removed') { const d = drivers.get(m.id); d?.marker?.remove(); drivers.delete(m.id); if (selected === m.id) selected = null; }
       else if (m.t === 'voice') { feedAdd('🎙 ' + m.from, m.dur ? 'بث (' + (m.dur/1000).toFixed(1) + ' ث)' : 'بث صوتي', m);

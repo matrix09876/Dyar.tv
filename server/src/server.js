@@ -100,6 +100,16 @@ function reindexOrder(o, prevDriverId) {
   }
 }
 
+// ---------- 🏪 المتاجر: نقاط التقاط حية على الخريطة (مراقب المتجر) ----------
+const stores = new Map();                 // ST-x -> {id, name, lat, lng}
+let storeSeq = 0;
+const matchStore = (title) => { for (const s of stores.values()) if (s.name && String(title).includes(s.name)) return s; return null; };
+// ربط الطلب بمتجره: يعطي مسار التقاط (الموصل ← المتجر ← الزبون) وإحصاء حي لكل متجر
+function linkStore(o) {
+  const st = (o.title && matchStore(o.title)) || null;
+  if (st) { o.storeId = st.id; o.origin ||= { lat: st.lat, lng: st.lng }; }
+}
+
 const closedOrders = [];                  // آخر 100 طلب مغلق (اليوم) — للوحة «المغلقة» بسجلها الكامل
 function setOrder(o, patch) {
   const prevDriver = o.driverId, prevStatus = o.status;
@@ -223,9 +233,10 @@ const talyaFeed = (text) => broadcastOps({ t: 'talya', text, at: Date.now() });
 // أقرب موصلين **أحرار** عبر الفهرس السداسي: خلية الوجهة ثم حلقات الجيران — لا مسح كامل
 const MAX_RING = 7;                                              // ~5 كم بحثاً بالخلايا قبل مظلة الأمان
 function dispatchCandidates(o) {
-  const cands = [], destKey = cellOf(o.dest.lat, o.dest.lng), visited = new Set();
+  const T = o.origin || o.dest;                                  // نقطة الالتقاط أولاً إن وُجد متجر (نمط Uber)
+  const cands = [], destKey = cellOf(T.lat, T.lng), visited = new Set();
   const pick = (id) => { const d = drivers.get(id);
-    if (d?.last && d.online && !d.sos && !driverBusy(id)) cands.push({ id: d.id, name: d.name, km: havKm(d.last, o.dest) }); };
+    if (d?.last && d.online && !d.sos && !driverBusy(id)) cands.push({ id: d.id, name: d.name, km: havKm(d.last, T) }); };
   for (let k = 0; k <= MAX_RING && cands.length < MAX_OFFERS * 2; k++)
     for (const key of cellDisk(destKey, k)) {
       if (visited.has(key)) continue; visited.add(key);
@@ -239,7 +250,7 @@ function dispatchCandidates(o) {
 function beginOffer(o, cands) {
   const of = { cands: cands.slice(0, MAX_OFFERS), idx: 0, timer: null, ranking: true };
   o._offer = of;
-  rankByEta(cands, o.dest)
+  rankByEta(cands, o.origin || o.dest)
     .then((ranked) => { if (o._offer === of) { if (ranked.length) of.cands = ranked.slice(0, MAX_OFFERS); of.ranking = false; offerNext(o); } })
     .catch(() => { if (o._offer === of) { of.ranking = false; offerNext(o); } });
 }
@@ -586,10 +597,13 @@ async function etaMonitor() {
     .sort((a, b) => (a.etaAt || 0) - (b.etaAt || 0)).slice(0, ETA_BATCH);
   for (const o of batch) {
     const l = drivers.get(o.driverId)?.last; if (!l) continue;
-    let etaMin = etaEst(havKm(l, o.dest));
+    // قبل الاستلام والمتجر معروف: الرحلة رجلان (موصل ← متجر ← زبون)؛ بعده: مباشرة للزبون
+    const legs = (o.status === 'assigned' && o.origin) ? [l, o.origin, o.dest] : [l, o.dest];
+    let km = 0; for (let i = 0; i < legs.length - 1; i++) km += havKm(legs[i], legs[i + 1]);
+    let etaMin = etaEst(km);
     if (OSRM_URL && Date.now() >= osrmDownUntil) {
       try {
-        const r = await fetch(`${OSRM_URL}/route/v1/driving/${l.lng},${l.lat};${o.dest.lng},${o.dest.lat}?overview=false`,
+        const r = await fetch(`${OSRM_URL}/route/v1/driving/${legs.map(p => `${p.lng},${p.lat}`).join(';')}?overview=false`,
           { signal: AbortSignal.timeout(2500) });
         if (!r.ok) throw new Error('http ' + r.status);
         const s = (await r.json())?.routes?.[0]?.duration;
@@ -864,6 +878,9 @@ async function handleHttp(req, res) {
         status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
         history: [{ st: 'new', at: Date.now(), d: 'التطبيق' }],
         createdAt: Date.now(), updatedAt: Date.now() };
+      const gl = +b.origin?.lat, gg = +b.origin?.lng;           // موقع متجر التطبيق إن أُرسل — وإلا مطابقة بالاسم
+      if (Number.isFinite(gl) && Number.isFinite(gg) && Math.abs(gl) <= 90 && Math.abs(gg) <= 180) o.origin = { lat: gl, lng: gg };
+      linkStore(o);
       orders.set(o.id, o); ACTIVE.set(o.id, o);
       if (ref) refIndex.set(ref, o.id);
       statBump('created');
@@ -928,7 +945,7 @@ wss.on('connection', (ws) => {
     if (hello.role === 'ops') {
       opsClients.add(ws);
       send(ws, { t: 'snapshot', drivers: [...drivers.values()].map(publicInfo), orders: activeOrdersList(),
-        closed: closedOrders.slice(-30), priorities: openPriorities(), staff: STAFF });
+        closed: closedOrders.slice(-30), stores: [...stores.values()], priorities: openPriorities(), staff: STAFF });
       ws.on('message', (raw2) => {
         let m; try { m = JSON.parse(raw2); } catch { return; }
         if (handleShared(m, hello.name || 'العمليات', 'ops', ws)) return;
@@ -949,6 +966,25 @@ wss.on('connection', (ws) => {
           broadcastAll({ t: 'announce', text: String(m.text).slice(0, 300), speak: m.speak !== false, from: 'تاليا — ديار' }, ws);
           return;
         }
+        // ----- 🏪 المتاجر على الخريطة -----
+        if (m.t === 'store_add' && m.name && Number.isFinite(+m.lat) && Number.isFinite(+m.lng)
+            && Math.abs(+m.lat) <= 90 && Math.abs(+m.lng) <= 180 && stores.size < 200) {
+          const s = { id: 'ST-' + (++storeSeq), name: String(m.name).slice(0, 40), lat: +m.lat, lng: +m.lng };
+          stores.set(s.id, s);
+          broadcastOps({ t: 'store', s });
+          return;
+        }
+        if (m.t === 'store_rename' && stores.has(m.id) && m.name) {
+          const s = stores.get(m.id); s.name = String(m.name).slice(0, 40);
+          broadcastOps({ t: 'store', s });
+          return;
+        }
+        if (m.t === 'store_remove' && stores.has(m.id)) {
+          stores.delete(m.id);
+          broadcastOps({ t: 'store_removed', id: m.id });
+          return;
+        }
+
         // ----- إدارة الأجهزة من اللوحة -----
         if (m.t === 'device_rename' && drivers.has(m.id) && m.name) {
           const d = drivers.get(m.id);
@@ -978,6 +1014,7 @@ wss.on('connection', (ws) => {
             status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
             history: [{ st: 'new', at: Date.now(), d: null }],
             createdAt: Date.now(), updatedAt: Date.now() };
+          linkStore(o);                                         // متجر مذكور بالعنوان ⟵ التقاط ثنائي الأرجل
           orders.set(o.id, o);
           ACTIVE.set(o.id, o);
           statBump('created');
