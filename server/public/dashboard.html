@@ -136,6 +136,9 @@
     <span class="chip"><span class="dot" style="background:var(--busy)"></span><span class="num" id="cBusy">0</span> في توصيلة</span>
     <span class="chip"><span class="dot" style="background:var(--route)"></span><span class="num" id="cOrd">0</span> طلب نشط</span>
     <span class="chip"><span class="dot" style="background:var(--offline)"></span><span class="num" id="cOff">0</span> غير متصل</span>
+    <span class="chip" title="طلبات اليوم — أُنجز / الهدف">📦 اليوم <span class="num" id="cToday">0</span> · ✅ <span class="num" id="cDone">0</span><span class="num" id="cGoal"></span></span>
+    <span class="chip" id="cPrioChip" style="cursor:pointer;display:none" title="أولويات مفتوحة — انقر للفتح">⚡ <span class="num" id="cPrio">0</span></span>
+    <button id="brainAskBtn" title="اسأل عقل ديار: حالة طلب، الهدف، الملاحظات، الإحاطة…">🧠 اسأل</button>
     <button id="talkBtn" title="اضغط مطولًا للتحدث لكل الأجهزة">🎙 تحدث</button>
     <button id="addBtn">➕ جهاز</button>
     <button id="addStoreBtn" title="انقر ثم حدد موقع المتجر على الخريطة">🏪 متجر</button>
@@ -154,18 +157,25 @@
 <div class="wrap">
   <aside>
     <div class="tabs">
-      <button class="active" data-p="drivers">الموصلون</button>
-      <button data-p="orders">الطلبات</button>
+      <button class="active" data-p="orders">الطلبات</button>
+      <button data-p="drivers">الموصلون</button>
+      <button data-p="stores">🏪</button>
       <button data-p="prio">⚡<span id="prioBadge">0</span></button>
       <button data-p="feed">البث</button>
     </div>
 
-    <div class="pane show" id="p-drivers">
+    <div class="pane" id="p-drivers">
       <div id="dlist"><div class="empty">لا أجهزة بعد — اضغط «➕ جهاز» وامسح الرمز من UR5 أو أي هاتف.</div></div>
     </div>
 
-    <div class="pane" id="p-orders">
+    <div class="pane" id="p-stores">
+      <div class="empty" style="padding:6px 0 10px;font-size:12px">أضف متجرًا: زر «🏪 متجر» بالأعلى ثم انقر موقعه على الخريطة.<br>الطلبات التي تذكر اسمه تُربط به تلقائيًا ويُسند موصلها من عنده.</div>
+      <div id="slist"></div>
+    </div>
+
+    <div class="pane show" id="p-orders">
       <button class="primary" id="newOrderBtn">＋ طلب جديد (انقر ثم حدد الوجهة على الخريطة)</button>
+      <input id="ordSearch" placeholder="🔎 بحث: رقم الطلب / رقم التطبيق / اسم / موصل…" style="width:100%;margin-top:6px">
       <div style="display:flex;gap:6px;margin:6px 0">
         <button class="ofilter active" data-f="active" style="flex:1;padding:6px;border:1px solid var(--line);border-radius:8px;background:var(--surface2);color:var(--text);cursor:pointer">النشطة <span id="cntAct">0</span></button>
         <button class="ofilter" data-f="closed" style="flex:1;padding:6px;border:1px solid var(--line);border-radius:8px;background:none;color:var(--muted);cursor:pointer">المغلقة اليوم <span id="cntClosed">0</span></button>
@@ -198,6 +208,22 @@
     </div>
   </div>
 </div>
+
+<dialog id="brainDlg" style="max-width:540px;width:92vw">
+  <h3>🧠 اسأل عقل ديار</h3>
+  <div style="display:flex;gap:6px;margin:10px 0 8px">
+    <input id="brainQ" placeholder="مثال: شو حالة طلب 5802؟ · سجّل ملاحظة: … · الهدف اليومي 40 طلب" style="flex:1">
+    <button class="primary" id="brainGo" style="padding:8px 16px">اسأل</button>
+  </div>
+  <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:8px">
+    <button class="bq">الإحاطة الصباحية</button><button class="bq">ما المشاكل الآن؟</button>
+    <button class="bq">وين وصلنا من الهدف؟</button><button class="bq">الملاحظات</button>
+    <button class="bq">مين عليه ضغط؟</button><button class="bq">كم طلبية أمس؟</button>
+  </div>
+  <div id="brainA" style="font-size:13.5px;line-height:1.85;min-height:2.5em;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px">اسألني عن أي شيء تشغيلي — أو استعمل الأزرار السريعة.</div>
+  <div id="brainAsOf" style="font-size:10.5px;color:var(--muted);direction:ltr;text-align:left;margin-top:4px;min-height:1.2em"></div>
+  <button onclick="brainDlg.close()" style="margin-top:8px;width:100%;padding:9px">إغلاق</button>
+</dialog>
 
 <dialog id="pinDlg">
   <h3>دخول غرفة العمليات</h3>
@@ -428,7 +454,27 @@
       const b = rec.el.querySelector('.scount');
       b.style.display = n ? 'block' : 'none'; b.textContent = n;
     }
+    renderStores();
   }
+  // 🏪 تبويب المتاجر: قائمة بمراقبة حية لكل متجر
+  function renderStores() {
+    const arr = [...storesM.values()].sort((a, b) => a.store.name.localeCompare(b.store.name, 'ar'));
+    $('slist').innerHTML = arr.length ? arr.map(({ store: s }) => { const st = storeStats(s.id);
+      return `<div class="prio-item">
+        <b>🏪 ${esc(s.name)}</b>${st.active ? ` <span class="prio-sev P2">${st.active} نشط</span>` : ''}
+        <div class="prio-meta">سُلِّم اليوم ${st.delivered} · متوسط زمن التوصيل ${st.avgMin != null ? st.avgMin + ' د' : '—'}</div>
+        <div class="prio-act">
+          <button onclick="zoomStore('${esc(s.id)}')">📍 عرض</button>
+          <button onclick="renameStore('${esc(s.id)}')">✏️ تسمية</button>
+          <button onclick="removeStore('${esc(s.id)}')">🗑 حذف</button>
+        </div></div>`; }).join('') : '';
+  }
+  window.zoomStore = (id) => { const r = storesM.get(id); if (r && map) map.flyTo({ center: [r.store.lng, r.store.lat], zoom: 15.5, duration: 700 }); };
+  window.renameStore = (id) => { const r = storesM.get(id); if (!r) return;
+    const n = (prompt('الاسم الجديد (كما يظهر في عناوين الطلبات):', r.store.name) || '').trim();
+    if (n) ws.send(JSON.stringify({ t: 'store_rename', id, name: n })); };
+  window.removeStore = (id) => { const r = storesM.get(id); if (r && confirm('حذف المتجر «' + r.store.name + '» من الخريطة؟'))
+    ws.send(JSON.stringify({ t: 'store_remove', id })); };
   function openStorePop(id) {
     const rec = storesM.get(id); if (!rec) return;
     const st = storeStats(id), s = rec.store;
@@ -531,12 +577,15 @@
     renderOrders();
   });
   function renderOrders() {
-    const act = [...ordersM.values()].sort((a,b) => b.createdAt - a.createdAt);
-    $('cOrd').textContent = act.length;
-    $('cntAct').textContent = act.length;
+    const qs = ($('ordSearch')?.value || '').trim();
+    const match = (o) => !qs || [o.id, o.ref, o.title, o.driverName].some(v => v && String(v).includes(qs));
+    const allAct = [...ordersM.values()];
+    $('cOrd').textContent = allAct.length;
+    $('cntAct').textContent = allAct.length;
     $('cntClosed').textContent = closedM.size;
+    const act = allAct.filter(match).sort((a,b) => b.createdAt - a.createdAt);
     if (orderFilter === 'closed') {
-      const cls = [...closedM.values()].sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
+      const cls = [...closedM.values()].filter(match).sort((a,b) => (b.updatedAt||0) - (a.updatedAt||0));
       $('olist').innerHTML = cls.length ? cls.map(o => `
         <div class="order" style="opacity:.85">
           <div class="top"><b class="num">${esc(o.id)}${o.ref ? ` <span style="color:var(--muted);font-size:11px">تطبيق #${esc(o.ref)}</span>` : ''}</b>
@@ -548,7 +597,8 @@
       return;
     }
     const arr = act;
-    if (!arr.length) { $('olist').innerHTML = '<div class="empty">لا طلبات نشطة الآن — الجديد يظهر فورًا من لوحتك أو من تطبيق ديار.</div>'; return; }
+    if (!arr.length) { $('olist').innerHTML = qs ? '<div class="empty">لا نتائج للبحث «' + esc(qs) + '».</div>'
+      : '<div class="empty">لا طلبات نشطة الآن — الجديد يظهر فورًا من لوحتك أو من تطبيق ديار.</div>'; return; }
     $('olist').innerHTML = arr.map(o => {
       const done = ['delivered','cancelled'].includes(o.status);
       const r = routeCache.get(o.id);
@@ -557,7 +607,7 @@
       return `<div class="order ${selectedOrder===o.id?'sel':''}" data-id="${o.id}">
         <div class="top"><b class="num">${esc(o.id)}${o.ref ? ` <span style="color:var(--muted);font-size:11px">تطبيق #${esc(o.ref)}</span>` : ''}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
         <div>${esc(o.title)}</div>
-        <div class="meta">${o.driverName ? '🛵 ' + esc(o.driverName) : o.offeredTo ? '🧕 تاليا تعرضه على ' + esc(o.offeredTo) + '…' : 'بلا موصل'} · ${age(o.createdAt)}</div>
+        <div class="meta">${o.driverName ? '🛵 ' + esc(o.driverName) : o.offeredTo ? '🧕 تاليا تعرضه على ' + esc(o.offeredTo) + '…' : 'بلا موصل'} · ${age(o.createdAt)}${o.storeId && storesM.get(o.storeId) ? ' · 🏪 ' + esc(storesM.get(o.storeId).store.name) + (o.status === 'assigned' ? ' ← 📍' : '') : ''}</div>
         ${(o.history || []).length > 1 ? `<div class="meta">📜 ${timeline(o)}</div>` : ''}
         ${!done && o.driverId && (o.etaMin || r) ? `<div class="eta num" ${o.riskLate ? 'style="color:var(--alert);font-weight:700"' : ''}>
           ${o.riskLate ? '🔶 خطر تأخير — ' : ''}⏱ الوصول بعد ${o.etaMin || Math.ceil(r.min)} د بالطريق${r ? ` · 🛣 ${r.km.toFixed(1)} كم` : ''}</div>` : ''}
@@ -650,7 +700,7 @@
         prsM.clear(); (m.priorities || []).forEach(p => prsM.set(p.id, p)); renderPrio();
       }
       else if (m.t === 'store') upsertStore(m.s);
-      else if (m.t === 'store_removed') { const r = storesM.get(m.id); r?.marker?.remove(); storesM.delete(m.id); }
+      else if (m.t === 'store_removed') { const r = storesM.get(m.id); r?.marker?.remove(); storesM.delete(m.id); renderStores(); }
       else if (m.t === 'priority') {
         if (PR_OPEN_ST.has(m.p.status)) { if (!prsM.has(m.p.id) && ['P0','P1'].includes(m.p.severity)) sosSound(); prsM.set(m.p.id, m.p); }
         else prsM.delete(m.p.id);
@@ -708,6 +758,8 @@
     const badge = $('prioBadge');
     badge.style.display = list.length ? 'inline-block' : 'none';
     badge.textContent = list.length;
+    $('cPrioChip').style.display = list.length ? 'inline-flex' : 'none';
+    $('cPrio').textContent = list.length;
     if (!list.length) { $('plist').innerHTML = '<div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div>'; return; }
     $('plist').innerHTML = list.map(p => `
       <div class="prio-item ${p.escalationLevel ? 'esc' : ''}">
@@ -727,6 +779,37 @@
     ws && ws.send(JSON.stringify({ t: 'priority_action', id, action, who: myName(), note }));
   };
   setInterval(renderPrio, 30_000);   // تحديث الأعمار
+
+  // ================= 🧠 اسأل عقل ديار من اللوحة + مؤشرات اليوم =================
+  $('brainAskBtn').onclick = () => { brainDlg.showModal(); $('brainQ').focus(); };
+  async function askBrain(q) {
+    if (!q) return;
+    $('brainA').textContent = '… أفحص البيانات الحية';
+    try {
+      const r = await fetch('/api/brain/ask', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pin, q, staff: localStorage.getItem('ops_name') || '' }) });
+      const j = await r.json();
+      $('brainA').textContent = j.answer || j.error || 'بلا جواب';
+      $('brainAsOf').textContent = j.asOf ? 'DATA AS OF ' + new Date(j.asOf).toLocaleTimeString('en-GB') : '';
+      pollSummary();                                      // قد يكون السؤال غيّر الحالة (هدف/ملاحظة)
+    } catch { $('brainA').textContent = 'تعذر الوصول للخادم — حاول ثانية.'; }
+  }
+  $('brainGo').onclick = () => { askBrain($('brainQ').value.trim()); };
+  $('brainQ').addEventListener('keydown', e => { if (e.key === 'Enter') $('brainGo').onclick(); });
+  document.querySelectorAll('.bq').forEach(b => b.onclick = () => { $('brainQ').value = b.textContent; askBrain(b.textContent); });
+  $('cPrioChip').onclick = () => document.querySelector('.tabs button[data-p="prio"]').click();
+  $('ordSearch').addEventListener('input', renderOrders);
+  async function pollSummary() {                          // مؤشرات اليوم والهدف في الشريط العلوي
+    try {
+      const r = await fetch('/api/brain/summary', { headers: { 'x-kiosk-pin': pin } });
+      if (!r.ok) return;
+      const s = await r.json();
+      $('cToday').textContent = s.today.created;
+      $('cDone').textContent = s.today.delivered;
+      $('cGoal').textContent = s.goal ? '/' + s.goal : '';
+    } catch {}
+  }
+  setInterval(pollSummary, 30_000);
 
   // ================= البث والإعلان =================
   function feedAdd(who, text, audio) {
@@ -784,7 +867,7 @@
   // ================= الدخول + إضافة جهاز + لوحة العقل =================
   function askPin(msg) { if (msg) $('pinInput').placeholder = msg; pinDlg.showModal(); }
   $('pinGo').onclick = () => { pin = $('pinInput').value.trim(); if (!pin) return;
-    sessionStorage.pin = pin; pinDlg.close(); connect(); };
+    sessionStorage.pin = pin; pinDlg.close(); connect(); pollSummary(); };
   $('addBtn').onclick = () => {
     const url = location.origin + '/driver.html';
     $('drvLink').textContent = url;
@@ -797,7 +880,7 @@
     .then(c => { $('brainLink').href = c.brainPanelUrl; if (c.hexKm) HEXKM = c.hexKm; })
     .catch(() => { $('brainLink').style.display = 'none'; });
 
-  pin ? connect() : askPin();
+  if (pin) { connect(); pollSummary(); } else askPin();
 </script>
 </body>
 </html>
