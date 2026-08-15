@@ -209,6 +209,10 @@
   const havKm = (a, b) => { const R=6371, dLa=(b.lat-a.lat)*Math.PI/180, dLo=(b.lng-a.lng)*Math.PI/180;
     const x = Math.sin(dLa/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;
     return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x)); };
+  // هدف المرحلة الحالية: قبل الاستلام والمتجر معروف ⟵ المتجر أولاً؛ بعده ⟵ الزبون
+  const navTarget = () => !myOrder ? null
+    : (myOrder.status === 'assigned' && myOrder.origin) ? { ...myOrder.origin, label: 'المتجر 🏪' }
+    : { ...myOrder.dest, label: 'الزبون 📍' };
   function renderOrder() {
     const c = $('orderCard');
     if (!myOrder) { c.style.display = 'none'; return; }
@@ -219,8 +223,10 @@
     $('ordSt').textContent = picked ? 'استُلم — بطريقك للزبون' : 'مُسنَد — توجه للاستلام';
     $('ordPick').style.display = picked ? 'none' : 'block';
     $('ordDone').style.display = picked ? 'block' : 'none';
-    $('ordDist').textContent = lastFix
-      ? 'المسافة للوجهة: ' + havKm(lastFix, myOrder.dest).toFixed(1) + ' كم (خط مستقيم)' : '';
+    const t = navTarget();
+    $('ordNav').textContent = '🧭 وجّهني — ' + t.label;
+    $('ordDist').textContent = lastFix && t
+      ? 'المسافة إلى ' + t.label + ': ' + havKm(lastFix, t).toFixed(1) + ' كم (خط مستقيم)' : '';
   }
   function setOrderMsg(o, announceNew) {
     const isNew = o && (!myOrder || myOrder.id !== o.id);
@@ -235,8 +241,8 @@
     logEv('', '📦 أنت', 'استلمت الطلب ' + myOrder.id); };
   $('ordDone').onclick = () => { if (!myOrder) return; ws && ws.send(JSON.stringify({ t: 'order_status', status: 'delivered', orderId: myOrder.id }));
     logEv('', '✅ أنت', 'سلّمت الطلب ' + myOrder.id); };
-  $('ordNav').onclick = () => { if (myOrder)
-    window.open('https://www.google.com/maps/dir/?api=1&destination=' + myOrder.dest.lat + ',' + myOrder.dest.lng, '_blank'); };
+  $('ordNav').onclick = () => { const t = navTarget(); if (t)
+    window.open('https://www.google.com/maps/dir/?api=1&destination=' + t.lat + ',' + t.lng + '&travelmode=driving', '_blank'); };
 
   function onMsg(e) {
     const m = JSON.parse(e.data);

@@ -144,6 +144,7 @@ function statBump(kind, off = 0) {
   if (kind in s) s[kind]++;
   dailyStats.set(k, s);
   if (dailyStats.size > 8) { const oldest = [...dailyStats.keys()].sort()[0]; dailyStats.delete(oldest); }
+  backupDirty = true;                                            // 💾 يُنسخ لغرفة التشغيل خلال دقيقة
 }
 const statsFor = (off) => dailyStats.get(dateKey(off)) || { created: 0, delivered: 0, cancelled: 0, escalated: 0, sos: 0 };
 
@@ -353,6 +354,34 @@ function brainEvent(event, payload) {
     body: JSON.stringify({ event, at: Date.now(), ...payload }),
     signal: AbortSignal.timeout(8000),                            // لا تكديس وعود عند تعثّر الطرف الآخر
   }).catch(() => {});
+}
+
+// ---------- 💾 ديمومة الحالة عبر غرفة التشغيل (تخزينها دائم) — تنجو من إعادة النشر ----------
+// المتاجر والإحصاء اليومي يُنسخان احتياطياً إلى غرفة التشغيل عند كل تغيّر، ويُستعادان عند الإقلاع.
+let backupDirty = false;
+function backupState() {
+  if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
+  brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq } });
+  backupDirty = false;
+}
+setInterval(() => { if (backupDirty) backupState(); }, 60_000).unref?.();
+async function restoreState() {
+  if (!BRAIN_PANEL_URL || !process.env.BRAIN_API_KEY) return;
+  try {
+    const r = await fetch(BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect/backup',
+      { headers: { 'x-api-key': BRAIN_API_KEY }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return;
+    const b = (await r.json())?.backup;
+    if (!b) return;
+    if (!stores.size && Array.isArray(b.stores)) {
+      for (const s of b.stores) if (s?.id && s.name && Number.isFinite(+s.lat) && Number.isFinite(+s.lng))
+        stores.set(s.id, { id: s.id, name: String(s.name).slice(0, 40), lat: +s.lat, lng: +s.lng });
+      storeSeq = Math.max(storeSeq, +b.storeSeq || 0, ...[...stores.keys()].map(k => +String(k).split('-')[1] || 0));
+    }
+    if (Array.isArray(b.dailyStats))
+      for (const [k, v] of b.dailyStats) if (!dailyStats.has(k) && v && typeof v === 'object') dailyStats.set(k, v);
+    console.log(`[💾] استُعيدت الحالة من غرفة التشغيل: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء`);
+  } catch { /* أفضل-جهد — يعمل بلا استعادة */ }
 }
 
 // ---------- تسجيل ذاتي لدى غرفة التشغيل (Zero-Config) ----------
@@ -972,16 +1001,19 @@ wss.on('connection', (ws) => {
           const s = { id: 'ST-' + (++storeSeq), name: String(m.name).slice(0, 40), lat: +m.lat, lng: +m.lng };
           stores.set(s.id, s);
           broadcastOps({ t: 'store', s });
+          backupState();                                        // 💾 المتاجر تنجو من إعادة النشر
           return;
         }
         if (m.t === 'store_rename' && stores.has(m.id) && m.name) {
           const s = stores.get(m.id); s.name = String(m.name).slice(0, 40);
           broadcastOps({ t: 'store', s });
+          backupState();
           return;
         }
         if (m.t === 'store_remove' && stores.has(m.id)) {
           stores.delete(m.id);
           broadcastOps({ t: 'store_removed', id: m.id });
+          backupState();
           return;
         }
 
@@ -1166,4 +1198,5 @@ server.listen(PORT, () => {
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');
   registerWithBrain();   // ربط ذاتي فوري بغرفة التشغيل
+  restoreState();        // 💾 استعادة المتاجر والإحصاء من النسخة الاحتياطية (إن وُجدت)
 });
