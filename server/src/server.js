@@ -170,6 +170,7 @@ const brainMemory = {
   context: [],   // [{n, text, by, at}] — معلومات ثابتة: تسعير، ساعات، سياسات، مناطق
   notes: [],     // [{n, text, by, at}] — ملاحظات/مهام المكتب الصوتية
   team: [],      // [{n, name, role, duties}] — الموظفون المعيَّنون (سكرتير، خدمة عملاء، ماركتنج…)
+  faq: [],       // [{n, text, by, at}] — معلومات **علنية للعملاء** (أسعار، ساعات، أرقام) — تُعرض ببوابة التتبع
   goals: { dailyOrders: Number(process.env.DAILY_GOAL || 0) },
 };
 let memSeq = 0;
@@ -526,8 +527,8 @@ function backupState() {
   if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
   pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${brainMemory.context.length} معلومة`);
   brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
-    context: brainMemory.context, notes: brainMemory.notes, team: brainMemory.team, goals: brainMemory.goals, memSeq,
-    vapid, pushSubs: [...pushSubs.values()] } });
+    context: brainMemory.context, notes: brainMemory.notes, team: brainMemory.team, faq: brainMemory.faq,
+    goals: brainMemory.goals, memSeq, vapid, pushSubs: [...pushSubs.values()] } });
   backupDirty = false;
 }
 setInterval(() => { if (backupDirty) backupState(); }, 60_000).unref?.();
@@ -549,6 +550,7 @@ async function restoreState() {
     if (!brainMemory.context.length && Array.isArray(b.context)) brainMemory.context = b.context.slice(0, 200);
     if (!brainMemory.notes.length && Array.isArray(b.notes)) brainMemory.notes = b.notes.slice(0, 200);
     if (!brainMemory.team.length && Array.isArray(b.team)) brainMemory.team = b.team.slice(0, 60);
+    if (!brainMemory.faq.length && Array.isArray(b.faq)) brainMemory.faq = b.faq.slice(0, 200);
     if (b.goals?.dailyOrders > 0 && !brainMemory.goals.dailyOrders) brainMemory.goals.dailyOrders = +b.goals.dailyOrders;
     memSeq = Math.max(memSeq, +b.memSeq || 0);
     if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
@@ -953,6 +955,18 @@ function brainAnswer(q, s, staff) {
     const it = memAdd('context', mm[1], staff);
     return `حفظت المعلومة رقم ${it.n} في معرفة الشركة — سأعتمدها في إجاباتي: «${it.text}».`;
   }
+  if ((mm = rawQ.match(/(?:احفظ|أحفظ|سجل|سجّل)\s*(?:معلومة|معلومه)?\s*للعملاء\s*[:：]?\s*(.{3,})/))) {
+    const it = memAdd('faq', mm[1], staff);
+    return `حفظت للعملاء (${it.n}): «${it.text}» — صارت تظهر في إجابات صفحة التتبع العامة فوراً.`;
+  }
+  if (has('معلومات العملاء', 'اسئله العملاء', 'معرفه العملاء'))
+    return brainMemory.faq.length
+      ? `معلومات العملاء العلنية (${brainMemory.faq.length}): ` + brainMemory.faq.slice(-8).map(x => `(${x.n}) ${x.text}`).join(' · ') + '. للحذف: «امسح معلومة العملاء N».'
+      : 'لا معلومات عملاء محفوظة. قولوا: «احفظ للعملاء: التوصيل داخل البعنة 15 شيكل» وستظهر ببوابة التتبع.';
+  if ((mm = t.match(/امسح\s*(?:معلومه)?\s*العملاء\s*(?:رقم)?\s*(\d+)/))) {
+    const it = memRemove('faq', mm[1]);
+    return it ? `حُذفت معلومة العملاء ${mm[1]}: «${it.text}».` : `لا معلومة عملاء برقم ${mm[1]}.`;
+  }
   if ((mm = rawQ.match(/(?:سجل|سجّل)\s*(?:ملاحظة|ملاحظه|مهمة|مهمه)?\s*[:：]\s*(.{3,})/))) {
     const it = memAdd('notes', mm[1], staff);
     return `سجلت الملاحظة رقم ${it.n}${staff ? ' باسم ' + staff : ''}. عندكم الآن ${brainMemory.notes.length} ملاحظة مفتوحة.`;
@@ -1165,6 +1179,30 @@ async function askClaude(q, s, staff) {
 // ---------- HTTP: ملفات + REST للوحة العقل ----------
 const MIME = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml', '.json': 'application/json' };
 const ttsCache = new Map();               // نص -> صوت تاليا mp3 — العبارات المتكررة لا تُولَّد مرتين
+
+// ---------- 🌐 عتاد بوابة العملاء: محدّد معدل + بحث بالمرجع + حمولة آمنة ----------
+const RL = new Map();                     // ip -> {n, resetAt} — حماية النقاط العلنية من الإغراق
+function rateOk(req, limit) {
+  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '?').split(',')[0].trim();
+  const now = Date.now();
+  let e = RL.get(ip);
+  if (!e || now > e.resetAt) { e = { n: 0, resetAt: now + 60_000 }; RL.set(ip, e); }
+  if (RL.size > 5000) RL.clear();
+  return ++e.n <= limit;
+}
+const STAGE_AR = { new: 'استلمنا طلبك، وتاليا تبحث عن أقرب موصل', assigned: 'موصلك بالطريق لاستلام طلبك من المتجر',
+  picked: 'طلبك بالطريق إليك الآن 🛵', delivered: 'وصل طلبك — بالهناء والشفاء! ✓', cancelled: 'أُلغي هذا الطلب' };
+const findByRef = (q) => { const ref = String(q || '').trim(); if (!ref) return null;
+  return orders.get(refIndex.get(ref)) || orders.get(ref)
+    || [...orders.values()].find(x => x.ref === ref)
+    || [...closedOrders].reverse().find(x => x.ref === ref || x.id === ref) || null; };
+// الحد الأدنى الآمن للعميل: الحالة والمراحل بأوقاتها والاسم الأول للموصل والوصول المتوقع — لا أكثر
+const trackPayload = (o) => ({ ref: o.ref || null, id: o.id,
+  status: o.extDelivered ? 'delivered' : o.status,               // سُلّم خارج المنظومة = وصل للعميل فعلاً
+  stage: o.extDelivered ? STAGE_AR.delivered : (STAGE_AR[o.status] || o.status),
+  driver: o.driverName ? String(o.driverName).trim().split(/\s+/)[0] : null,
+  etaMin: !TERMINAL.has(o.status) ? (o.etaMin || null) : null,
+  steps: (o.history || []).map(h => ({ st: h.st, at: h.at })), updatedAt: o.updatedAt });
 const readBody = (req) => new Promise((res) => {
   let b = '', done = false; const fin = (v) => { if (!done) { done = true; res(v); } };
   req.on('data', c => { b += c; if (b.length > 1e6) { req.destroy(); fin({}); } });   // لا يعلّق الطلب عند تجاوز الحجم
@@ -1184,6 +1222,41 @@ async function handleHttp(req, res) {
               panelUses: process.env.OPS_PIN ? 'OPS_PIN' : process.env.DYAR_PIN ? 'DYAR_PIN' : 'الافتراضي 1234' } });
   if (url.pathname === '/api/config')
     return json(200, { brainPanelUrl: BRAIN_PANEL_URL, hexKm: HEX_KM });
+
+  // ===== 🌐 بوابة العملاء العامة (نمط Jarvis Helpdesk): تتبع فوري + إجابات بلا مكالمة =====
+  // علنية بلا رمز — رقم الطلب بيد صاحبه، والمكشوف حدّه الأدنى الآمن (لا عناوين ولا هواتف)
+  if (url.pathname === '/api/track' && req.method === 'GET') {
+    if (!rateOk(req, 30)) return json(429, { error: 'محاولات كثيرة — انتظر دقيقة' });
+    const o = findByRef(url.searchParams.get('ref'));
+    return o ? json(200, { ok: true, order: trackPayload(o) })
+             : json(404, { ok: false, error: 'لا نجد طلباً بهذا الرقم — تأكد منه أو تواصل مع مكتب ديار' });
+  }
+  if (url.pathname === '/api/track/ask' && req.method === 'POST') {
+    if (!rateOk(req, 15)) return json(429, { error: 'محاولات كثيرة — انتظر دقيقة' });
+    const b = await readBody(req);
+    const q = String(b.q || '').slice(0, 200);
+    const digits = q.match(/\d{3,}/);
+    if (digits) {                                              // «وين طلبي 5802؟» ⟵ تتبع مباشر
+      const o = findByRef(digits[0]);
+      if (o) return json(200, { answer: `طلبك ${digits[0]}: ${STAGE_AR[o.status] || o.status}` +
+        (o.etaMin && !TERMINAL.has(o.status) ? ` — الوصول المتوقع خلال ${o.etaMin} دقيقة تقريباً` : '') + '.',
+        order: trackPayload(o) });
+      return json(200, { answer: `لا نجد طلباً بالرقم ${digits[0]} — تأكد من الرقم كما يظهر في تطبيق ديار، أو تواصل مع المكتب.` });
+    }
+    // معرفة العملاء العلنية: أفضل تطابق كلمات مع ما حفظه المكتب («احفظ للعملاء: …»)
+    const qn = String(q).replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/[؟?!.،,:؛]/g, ' ');
+    let best = null, bestScore = 0;
+    for (const f of brainMemory.faq) {
+      const fn = String(f.text).replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+      let sc = 0;
+      for (const w of qn.split(/\s+/)) if (w.length >= 3 && fn.includes(w)) sc++;
+      if (sc > bestScore) { bestScore = sc; best = f; }
+    }
+    if (best && bestScore >= 1) return json(200, { answer: best.text });
+    const contacts = brainMemory.faq.filter(f => /رقم|هاتف|واتس/.test(f.text)).map(f => f.text);
+    return json(200, { answer: 'لخدمتك أفضل، اكتب رقم طلبك لأتتبعه فوراً، أو تواصل مع مكتب ديار' +
+      (contacts.length ? ': ' + contacts.join(' · ') : ' عبر تطبيق ديار.') });
+  }
 
   // ===== 📺 شاشة عقل ديار (kiosk) — محمية برمز اللوحة OPS_PIN =====
   if (url.pathname === '/api/brain/summary' && req.method === 'GET') {

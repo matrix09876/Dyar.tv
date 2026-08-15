@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>تتبع طلبك — ديار</title>
+<link rel="icon" href="/icon.svg">
+<style>
+  :root{ --bg:#0e1117; --surface:#1a1f2b; --line:#2b3245; --text:#e9ebf1; --muted:#98a1b4;
+         --accent:#e2432e; --ok:#3fbf77; --busy:#e2a43c }
+  *{box-sizing:border-box; margin:0}
+  body{background:linear-gradient(180deg,#141a28,var(--bg) 40%); color:var(--text); min-height:100vh;
+       font-family:"Segoe UI",Tahoma,Arial,sans-serif; display:flex; flex-direction:column; align-items:center; padding:20px 14px}
+  .logo{display:flex; align-items:center; gap:10px; margin:10px 0 4px}
+  .logo .mark{width:44px;height:44px;border-radius:13px;background:linear-gradient(135deg,var(--accent),#8f2417);
+              display:grid;place-items:center;font-size:24px;font-weight:800;color:#fff}
+  .logo b{font-size:22px} .logo b span{color:var(--accent)}
+  .sub{color:var(--muted); font-size:13px; margin-bottom:18px}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:16px; padding:16px; width:min(480px,100%); margin-bottom:12px}
+  .row{display:flex; gap:8px}
+  input{flex:1; padding:13px; border-radius:11px; border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:16px}
+  button{font:inherit; cursor:pointer; background:var(--accent); color:#fff; border:none; border-radius:11px; padding:13px 20px; font-weight:700}
+  #status{display:none}
+  .stage{font-size:19px; font-weight:800; line-height:1.6; margin-bottom:4px}
+  .eta{color:var(--busy); font-size:15px; font-weight:700; min-height:1.4em}
+  .drv{color:var(--muted); font-size:13.5px; margin-top:2px}
+  .steps{display:flex; justify-content:space-between; margin:18px 4px 6px; position:relative}
+  .steps::before{content:''; position:absolute; top:13px; right:10%; left:10%; height:3px; background:var(--line); z-index:0}
+  .step{position:relative; z-index:1; text-align:center; width:25%}
+  .step .dot{width:28px;height:28px;border-radius:50%;background:var(--line);margin:0 auto 6px;display:grid;place-items:center;font-size:13px;color:#fff}
+  .step.on .dot{background:var(--ok)} .step.now .dot{background:var(--accent); animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{box-shadow:0 0 0 7px rgba(226,67,46,.25)}}
+  .step .l{font-size:11px; color:var(--muted)} .step.on .l,.step.now .l{color:var(--text)}
+  #err{color:#ff9c9c; font-size:14px; min-height:1.3em; margin-top:8px}
+  .chat{display:flex; flex-direction:column; gap:8px}
+  .chat h3{font-size:14.5px} .chat h3 span{color:var(--muted); font-weight:400; font-size:12px}
+  #msgs{display:flex; flex-direction:column; gap:7px; max-height:40vh; overflow:auto}
+  .msg{padding:9px 12px; border-radius:12px; font-size:14px; line-height:1.7; max-width:88%}
+  .msg.me{background:#26304a; align-self:flex-start}
+  .msg.bot{background:var(--bg); border:1px solid var(--line); align-self:flex-end}
+  .foot{color:var(--muted); font-size:11.5px; text-align:center; margin-top:auto; padding-top:16px; line-height:1.8}
+</style>
+</head>
+<body>
+  <div class="logo"><div class="mark">د</div><b>ديار <span>للتوصيل</span></b></div>
+  <div class="sub">تتبّع طلبك لحظة بلحظة — بلا اتصال وبلا انتظار</div>
+
+  <div class="card">
+    <div class="row">
+      <input id="ref" inputmode="numeric" placeholder="اكتب رقم طلبك (مثل 5802)">
+      <button id="go">تتبّع</button>
+    </div>
+    <div id="err"></div>
+    <div id="status">
+      <div class="steps">
+        <div class="step" data-s="new"><div class="dot">📝</div><div class="l">استلمنا الطلب</div></div>
+        <div class="step" data-s="assigned"><div class="dot">🛵</div><div class="l">موصل بالطريق للمتجر</div></div>
+        <div class="step" data-s="picked"><div class="dot">📦</div><div class="l">بالطريق إليك</div></div>
+        <div class="step" data-s="delivered"><div class="dot">✓</div><div class="l">وصل</div></div>
+      </div>
+      <div class="stage" id="stage"></div>
+      <div class="eta" id="eta"></div>
+      <div class="drv" id="drv"></div>
+    </div>
+  </div>
+
+  <div class="card chat">
+    <h3>💬 اسأل ديار <span>— أسعار التوصيل، ساعات العمل، أو اكتب رقم طلب</span></h3>
+    <div id="msgs"><div class="msg bot">أهلاً بك! اكتب رقم طلبك لأتتبعه، أو اسألني أي سؤال عن خدمة ديار.</div></div>
+    <div class="row">
+      <input id="q" placeholder="سؤالك…">
+      <button id="send">إرسال</button>
+    </div>
+  </div>
+
+  <div class="foot">خدمة ديار للتوصيل — البعنة · دير الأسد · مجد الكروم · كرمئيل والجوار<br>تحدّث هذه الصفحة نفسها تلقائيًا كل ٢٠ ثانية أثناء تتبع طلبك</div>
+
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ORDERED = ['new', 'assigned', 'picked', 'delivered'];
+let timer = null;
+
+async function track(ref, quiet) {
+  ref = String(ref || '').trim();
+  if (!ref) return;
+  try {
+    const r = await fetch('/api/track?ref=' + encodeURIComponent(ref));
+    const j = await r.json();
+    if (!j.ok) { if (!quiet) { $('#err').textContent = j.error || 'تعذر التتبع'; $('#status').style.display = 'none'; } return; }
+    $('#err').textContent = '';
+    const o = j.order;
+    $('#status').style.display = 'block';
+    $('#stage').textContent = o.stage;
+    $('#eta').textContent = o.etaMin ? `⏱ الوصول المتوقع خلال ~${o.etaMin} دقيقة` : '';
+    $('#drv').textContent = o.driver && o.status !== 'delivered' ? `موصلك: ${o.driver} 🛵` : '';
+    const idx = o.status === 'cancelled' ? -1 : ORDERED.indexOf(o.status);
+    document.querySelectorAll('.step').forEach((el, i) => {
+      el.classList.toggle('on', idx > i || o.status === 'delivered');
+      el.classList.toggle('now', idx === i && o.status !== 'delivered');
+    });
+    if (o.status === 'cancelled') { $('#stage').textContent = 'أُلغي هذا الطلب — تواصل مع المكتب إن كان ذلك غير متوقع.'; }
+    clearInterval(timer);
+    if (!['delivered', 'cancelled'].includes(o.status)) timer = setInterval(() => track(ref, true), 20_000);
+  } catch { if (!quiet) $('#err').textContent = 'تعذر الاتصال — حاول ثانية'; }
+}
+$('#go').onclick = () => track($('#ref').value);
+$('#ref').addEventListener('keydown', e => { if (e.key === 'Enter') $('#go').onclick(); });
+
+function bubble(text, me) {
+  const d = document.createElement('div');
+  d.className = 'msg ' + (me ? 'me' : 'bot');
+  d.textContent = text;
+  $('#msgs').appendChild(d);
+  $('#msgs').scrollTop = 1e6;
+}
+$('#send').onclick = async () => {
+  const q = $('#q').value.trim();
+  if (!q) return;
+  $('#q').value = '';
+  bubble(q, true);
+  try {
+    const j = await (await fetch('/api/track/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q }) })).json();
+    bubble(j.answer || j.error || '…');
+    if (j.order) { $('#ref').value = j.order.ref || j.order.id; track($('#ref').value); }
+  } catch { bubble('تعذر الاتصال — حاول ثانية.'); }
+};
+$('#q').addEventListener('keydown', e => { if (e.key === 'Enter') $('#send').onclick(); });
+
+const p = new URLSearchParams(location.search).get('ref');
+if (p) { $('#ref').value = p; track(p); }
+</script>
+</body>
+</html>
