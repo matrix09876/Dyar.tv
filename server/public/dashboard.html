@@ -176,6 +176,7 @@
     <div id="pickHint">انقر على الخريطة لتحديد وجهة الطلب — Esc للإلغاء</div>
     <div class="maptools">
       <label><input type="checkbox" id="tTrails" checked> مسارات الحركة</label>
+      <label><input type="checkbox" id="tCells"> خلايا التغطية</label>
       <label><input type="checkbox" id="tAcc" checked> دوائر دقة GPS</label>
       <label><input type="checkbox" id="tFollow" checked> تتبع المحدد</label>
     </div>
@@ -237,6 +238,11 @@
     map.addLayer({ id: 'trails', type: 'line', source: 'trails',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
       paint: { 'line-color': '#e2432e', 'line-width': 3, 'line-opacity': 0.7 } });
+    map.addSource('cells', { type: 'geojson', data: fc([]) });     // الفهرس السداسي الحي (نمط H3)
+    map.addLayer({ id: 'cells-fill', type: 'fill', source: 'cells',
+      paint: { 'fill-color': '#3fbf77', 'fill-opacity': ['interpolate', ['linear'], ['get', 'n'], 1, 0.10, 3, 0.22, 6, 0.35] } });
+    map.addLayer({ id: 'cells-line', type: 'line', source: 'cells',
+      paint: { 'line-color': '#2b7a52', 'line-opacity': 0.6, 'line-width': 1.2 } });
     map.addSource('route', { type: 'geojson', data: fc([]) });
     map.addLayer({ id: 'route-casing', type: 'line', source: 'route',
       layout: { 'line-cap': 'round', 'line-join': 'round' },
@@ -263,6 +269,27 @@
     const x = Math.sin(dLa/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;
     return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1-x)); };
 
+  // ===== الخلايا السداسية (نفس رياضيات فهرس الخادم — نمط H3) =====
+  let HEXKM = 0.7;
+  const KM_LAT = 110.574, KM_LON = 111.320 * Math.cos(32.9 * Math.PI/180), SQ3 = Math.sqrt(3);
+  function hexCellOf(lat, lng) {
+    const x = lng * KM_LON, y = lat * KM_LAT;
+    const q = (SQ3/3 * x - y/3) / HEXKM, r = (2/3 * y) / HEXKM;
+    let rq = Math.round(q), rr = Math.round(r); const ry = Math.round(-q - r);
+    const dq = Math.abs(rq-q), dr = Math.abs(rr-r), dy = Math.abs(ry-(-q-r));
+    if (dq > dr && dq > dy) rq = -ry - rr; else if (dr > dy) rr = -rq - ry;
+    return rq + ',' + rr;
+  }
+  function hexPolygon(key) {
+    const [q, r] = key.split(',').map(Number);
+    const cx = HEXKM * (SQ3 * q + SQ3/2 * r), cy = HEXKM * (1.5 * r), pts = [];
+    for (let i = 0; i <= 6; i++) {
+      const a = Math.PI/180 * (60 * i + 30);
+      pts.push([(cx + HEXKM * Math.cos(a)) / KM_LON, (cy + HEXKM * Math.sin(a)) / KM_LAT]);
+    }
+    return pts;
+  }
+
   function redrawLayers() {
     if (!map || !map.getSource('acc')) return;
     const accF = [], trailF = [];
@@ -275,6 +302,15 @@
     }
     map.getSource('acc').setData(fc(accF));
     map.getSource('trails').setData(fc(trailF));
+    const cellF = [];
+    if ($('tCells').checked) {                                   // خلايا التغطية: أين يتركز الأسطول وأين الفجوات
+      const counts = new Map();
+      for (const d of drivers.values()) if (d.online && d.last)
+        { const k = hexCellOf(d.last.lat, d.last.lng); counts.set(k, (counts.get(k) || 0) + 1); }
+      for (const [k, n] of counts)
+        cellF.push({ type: 'Feature', properties: { n }, geometry: { type: 'Polygon', coordinates: [hexPolygon(k)] } });
+    }
+    map.getSource('cells') && map.getSource('cells').setData(fc(cellF));
     const r = selectedOrder && routeCache.get(selectedOrder);
     map.getSource('route').setData(fc(r?.geometry ? [ { type:'Feature', properties:{}, geometry: r.geometry } ] : []));
   }
@@ -412,7 +448,8 @@
         <div class="top"><b class="num">${esc(o.id)}</b><span class="st ${o.status}">${stTxt[o.status]}</span></div>
         <div>${esc(o.title)}</div>
         <div class="meta">${o.driverName ? '🛵 ' + esc(o.driverName) : o.offeredTo ? '🧕 تاليا تعرضه على ' + esc(o.offeredTo) + '…' : 'بلا موصل'} · ${age(o.createdAt)}</div>
-        ${!done && o.driverId && r ? `<div class="eta num">🛣 ${r.km.toFixed(1)} كم · ⏱ ${Math.ceil(r.min)} دقيقة${r.approx ? ' (تقديري)' : ''}</div>` : ''}
+        ${!done && o.driverId && (o.etaMin || r) ? `<div class="eta num" ${o.riskLate ? 'style="color:var(--alert);font-weight:700"' : ''}>
+          ${o.riskLate ? '🔶 خطر تأخير — ' : ''}⏱ الوصول بعد ${o.etaMin || Math.ceil(r.min)} د بالطريق${r ? ` · 🛣 ${r.km.toFixed(1)} كم` : ''}</div>` : ''}
         ${!done ? `<div class="acts">
           ${o.status === 'new' || !o.driverId ? `
             <select data-assign="${o.id}">
@@ -477,7 +514,7 @@
     document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
     document.querySelectorAll('.pane').forEach(p => p.classList.toggle('show', p.id === 'p-' + b.dataset.p));
   });
-  ['tTrails','tAcc'].forEach(id => $(id).addEventListener('change', redrawLayers));
+  ['tTrails','tAcc','tCells'].forEach(id => $(id).addEventListener('change', redrawLayers));
 
   // ================= WebSocket =================
   function connect() {
@@ -629,7 +666,7 @@
     addDlg.showModal();
   };
   fetch('/api/config').then(r => r.json())
-    .then(c => { $('brainLink').href = c.brainPanelUrl; })
+    .then(c => { $('brainLink').href = c.brainPanelUrl; if (c.hexKm) HEXKM = c.hexKm; })
     .catch(() => { $('brainLink').style.display = 'none'; });
 
   pin ? connect() : askPin();

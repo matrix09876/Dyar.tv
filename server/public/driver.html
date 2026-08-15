@@ -163,7 +163,8 @@
   function showOffer(m) {
     offer = m;
     $('offTitle').textContent = m.order.title;
-    $('offKm').textContent = m.km != null ? 'يبعد عنك ' + m.km + ' كم' : '';
+    $('offKm').textContent = m.etaMin != null ? '⏱ ' + m.etaMin + ' د بالطريق · ' + (m.km ?? '؟') + ' كم'
+      : (m.km != null ? 'يبعد عنك ' + m.km + ' كم' : '');
     $('offerCard').style.display = 'block';
     let left = m.expiresInS || 25;
     $('offCount').textContent = left;

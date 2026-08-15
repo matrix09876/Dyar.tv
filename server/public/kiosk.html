@@ -266,7 +266,7 @@ function renderSummary(s) {
   setKpi('#kDone',   s.today.delivered, s.yesterday.delivered ? `أمس ${s.yesterday.delivered}` : '');
   setKpi('#kYest',   s.yesterday.created, `أُنجز ${s.yesterday.delivered}`);
   setKpi('#kActive', s.active, `${s.waiting} في الانتظار`, s.waiting ? 'warn' : '');
-  setKpi('#kOnline', s.online, `من ${s.devices} جهاز`, s.online ? 'good' : 'bad');
+  setKpi('#kOnline', s.online, `من ${s.devices} جهاز${s.cells ? ' · ' + s.cells + ' خلية' : ''}`, s.online ? 'good' : 'bad');
   applyStaff(s.staff);
   $('#aiBadge').textContent = s.ai ? '⚡ الاستدلال: عقل كلاودي (Claude) + بوابة أدوات' : '⚙ الاستدلال المحلي الفوري';
   if (s.prOpen) syncPriorities(s.prOpen, true);
