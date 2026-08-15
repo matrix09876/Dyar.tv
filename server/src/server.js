@@ -64,7 +64,7 @@ const ORDER_STATUSES = new Set(['new', 'assigned', 'picked', 'delivered', 'cance
 const NEXT_OK = { new: ['assigned', 'cancelled'], assigned: ['picked', 'cancelled', 'new'],
   picked: ['delivered', 'cancelled'], delivered: [], cancelled: [] };
 
-const orderPublic = ({ _offer, ...rest }) => rest;               // لا يُبث المؤقّت الداخلي أبداً
+const orderPublic = ({ _offer, _reminded, _evictAt, ...rest }) => rest;   // لا تُبث الحقول الداخلية أبداً
 const activeOrdersList = () => [...ACTIVE.values()].sort((a, b) => b.createdAt - a.createdAt).map(orderPublic);
 const driverWs = (id) => driverToWs.get(id);
 const driverActiveOrderRaw = (id) => { const oid = driverToOrderId.get(id); return oid ? orders.get(oid) || null : null; };
@@ -239,7 +239,7 @@ function beginOffer(o, cands) {
 
 // ---------- طابور الانتظار: طلبات لم تجد موصلاً حرًّا، تُعاد المحاولة عند تفرّغ أي موصل ----------
 const pending = new Map();                 // orderId -> وقت الدخول للطابور
-const STALE_ESCALATE_MS = 5 * 60_000;      // بعد 5 دقائق بلا إسناد رغم وجود موصلين ← تصعيد بشري
+const STALE_ESCALATE_MS = Number(process.env.STALE_ESCALATE_MIN || 5) * 60_000;   // تصعيد بشري (والمحاولة لا تتوقف)
 function enqueue(o) {
   if (o.status !== 'new') return;
   o._offer = null;
@@ -252,15 +252,14 @@ function pumpQueue() {
     const o = orders.get(id);
     if (!o || o.status !== 'new') { pending.delete(id); continue; }
     if (o._offer) continue;
-    if (Date.now() - pending.get(id) > STALE_ESCALATE_MS && onlineIds.size) {   // عالق طويلاً رغم وجود موصلين
-      pending.delete(id);
+    // عالق طويلاً رغم وجود موصلين ⟵ تصعيد بشري واحد، والمحاولة الآلية **لا تتوقف** (طيار آلي)
+    if (Date.now() - pending.get(id) > STALE_ESCALATE_MS && onlineIds.size && !prByKey.has('escalated:' + o.id)) {
       statBump('escalated');
-      talyaFeed(`🔴 ${o.id}: انتظر طويلاً بلا قبول — أحتاج قرار العمليات.`);
+      talyaFeed(`🔴 ${o.id}: انتظر طويلاً بلا قبول — صعّدت للعمليات وأواصل المحاولة.`);
       brainEvent('dispatch_escalated', { order: orderPublic(o), reason: 'stale' });
       prOpen('escalated:' + o.id, { type: 'dispatch', score: 82, orderId: o.id, source: 'dispatch',
         title: `${o.id} (${o.title}) بلا قبول رغم وجود موصلين`,
-        recommendedAction: 'أسندوه يدوياً أو تواصلوا مع الموصلين لمعرفة سبب الرفض' });
-      continue;
+        recommendedAction: 'تاليا تواصل المحاولة آلياً — تدخلوا يدوياً إن لزم أو كلموا الموصلين' });
     }
     const cands = dispatchCandidates(o);
     if (!cands.length) return;                                   // لا موصل حرّ الآن — نتوقف حتى تفرّغ أحدهم
@@ -477,11 +476,40 @@ function prConditionActive(p) {
 }
 
 // ---------- الراصد (Observer): كشف استباقي + تحقق + تصعيد — كنس كل 10 ثوانٍ ----------
-const STUCK_ASSIGNED_MS = 15 * 60_000;    // مُسند بلا استلام
-const LATE_PICKED_MS = 45 * 60_000;       // مستلَم بلا تسليم
-const DRIVER_LOST_MS = 3 * 60_000;        // موصل معه طلب وانقطع
+const STUCK_ASSIGNED_MS = 15 * 60_000;    // مُسند بلا استلام (أولوية)
+const LATE_PICKED_MS = 45 * 60_000;       // مستلَم بلا تسليم (أولوية — لا سحب آلي: البضاعة معه)
+const DRIVER_LOST_MS = 3 * 60_000;        // موصل معه طلب وانقطع (أولوية)
+// 🤖 الطيار الآلي: تاليا تتعافى وحدها قبل أن يتدخل أحد — البشر للتصعيد فقط
+const REMIND_ASSIGNED_MS = Number(process.env.REMIND_ASSIGNED_MIN || 8) * 60_000;      // تذكير صوتي آلي
+const REASSIGN_ASSIGNED_MS = Number(process.env.REASSIGN_ASSIGNED_MIN || 18) * 60_000; // سحب: مُسند بلا استلام
+const REASSIGN_LOST_MS = Number(process.env.REASSIGN_LOST_MIN || 5) * 60_000;          // سحب: موصل منقطع قبل الاستلام
+function autoRecover(now) {
+  for (const o of [...ACTIVE.values()]) {
+    if (o.status !== 'assigned' || !o.driverId) continue;        // بعد الاستلام لا سحب آلي — تصعيد بشري فقط
+    const d = drivers.get(o.driverId);
+    const idleMs = now - o.updatedAt;
+    const lostMs = d && !d.online ? now - (d.lastSeen || 0) : 0;
+    if (lostMs > REASSIGN_LOST_MS || idleMs > REASSIGN_ASSIGNED_MS) {
+      const reason = lostMs > REASSIGN_LOST_MS
+        ? `انقطاع ${o.driverName || 'الموصل'} قبل الاستلام` : `بلا استلام منذ ${Math.round(idleMs / 60_000)} د`;
+      const prev = o.driverId;
+      cancelOffer(o);
+      setOrder(o, { driverId: null, driverName: null, status: 'new', offeredTo: null });
+      o._reminded = false;
+      pushDriverOrder(prev);
+      talyaSay(prev, `سُحب الطلب ${o.id} منك وأعيد توزيعه.`);
+      talyaFeed(`🔁 ${o.id}: سحبته آلياً (${reason}) — أعيد عرضه على الأقرب.`);
+      startDispatch(o);
+    } else if (idleMs > REMIND_ASSIGNED_MS && !o._reminded && d?.online) {
+      o._reminded = true;
+      talyaSay(o.driverId, `تذكير: الطلب ${o.id} بانتظار استلامك منذ ${Math.round(idleMs / 60_000)} دقائق.`);
+      talyaFeed(`⏰ ${o.id}: ذكّرت ${o.driverName} بالاستلام — أسحبه آلياً إن لم يستلم.`);
+    }
+  }
+}
 function prSweep() {
   const now = Date.now();
+  try { autoRecover(now); } catch (e) { console.error('[autoRecover]', e?.message); }
   // (1) كواشف استباقية من الحالة الحية — تفتح وتعيد التسعير ديناميكياً
   if (ACTIVE.size > 0 && onlineCount() === 0)
     prOpen('no_drivers', { type: 'no_drivers', score: 92, title: `${ACTIVE.size} طلب نشط بلا أي موصل متصل`,
