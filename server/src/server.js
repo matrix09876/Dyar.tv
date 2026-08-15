@@ -22,8 +22,21 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
 const PORT = Number(process.env.PORT || 8080);
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
-const pinOk = (got, want) => { const a = Buffer.from(String(got || '')), b = Buffer.from(String(want));
-  return a.length === b.length && timingSafeEqual(a, b); };
+// تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
+const normDigits = (s) => String(s || '')
+  .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+  .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d))).trim();
+// المقارنة تجرب النص كما وصل + نسخة مفكوكة الترميز (ترويسات HTTP تُقرأ latin1 فتشوّه UTF-8)
+const pinOk = (got, want) => {
+  const w = Buffer.from(normDigits(want));
+  const raw = String(got || '');
+  let recoded = raw; try { recoded = Buffer.from(raw, 'latin1').toString('utf8'); } catch {}
+  for (const cand of raw === recoded ? [raw] : [raw, recoded]) {
+    const a = Buffer.from(normDigits(cand));
+    if (a.length === w.length && timingSafeEqual(a, w)) return true;
+  }
+  return false;
+};
 const BRAIN_API_KEY = process.env.BRAIN_API_KEY || 'dyar-brain-key';
 const BRAIN_PANEL_URL = process.env.BRAIN_PANEL_URL || 'https://egint-support.onrender.com';
 const BRAIN_WEBHOOK_URL = process.env.BRAIN_WEBHOOK_URL

@@ -465,8 +465,9 @@ async function enter(hello) {
   startPolling(); connectWS();
   if (hello) { const g = `${partOfDay()}! أنا عقل ديار التنفيذي، جاهز في غرفة العمليات. قولوا «يا ديار» ثم اسألوا، أو عرّفوا عن أنفسكم.`; showAnswer(g); speak(g); }
 }
+const normDigits = (s) => String(s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).trim();
 async function tryGate() {
-  const v = $('#gatePin').value.trim();
+  const v = normDigits($('#gatePin').value);
   if (!v) return;
   localStorage.setItem('kiosk_pin', v);
   try { renderSummary(await fetchSummary()); enter(true); }

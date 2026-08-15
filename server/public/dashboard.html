@@ -973,7 +973,8 @@
 
   // ================= الدخول + إضافة جهاز + لوحة العقل =================
   function askPin(msg) { if (msg) $('pinInput').placeholder = msg; pinDlg.showModal(); }
-  $('pinGo').onclick = () => { pin = $('pinInput').value.trim(); if (!pin) return;
+  const normDigits = s => String(s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).trim();
+  $('pinGo').onclick = () => { pin = normDigits($('pinInput').value); if (!pin) return;
     sessionStorage.pin = pin; pinDlg.close(); connect(); pollSummary(); };
   $('addBtn').onclick = () => {
     const url = location.origin + '/driver.html';

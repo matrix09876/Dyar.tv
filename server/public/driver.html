@@ -185,7 +185,8 @@
 
   // ---------- اتصال ----------
   function start() {
-    const name = $('name').value.trim(), pin = $('pin').value.trim();
+    const nd = s => String(s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).trim();
+    const name = $('name').value.trim(), pin = nd($('pin').value);
     if (!name || !pin) { $('err').textContent = 'أدخل الاسم ورمز الربط'; return; }
     localStorage.driverName = name; localStorage.pin = pin;
     $('err').textContent = '';
