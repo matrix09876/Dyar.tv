@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'ops-room-hardened-3'; // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
+const BUILD_TAG = 'audit-18-fixed-4';    // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -110,6 +110,8 @@ const broadcastOps = (msg) => { const s = JSON.stringify(msg); for (const ws of 
 const broadcastDrivers = (msg, except) => { const s = JSON.stringify(msg); for (const ws of driverClients.keys()) if (ws !== except && ws.readyState === ws.OPEN && ws.bufferedAmount < MAX_BUFFER) ws.send(s); };
 const broadcastAll = (msg, except) => { broadcastOps(msg); broadcastDrivers(msg, except); };
 const onlineCount = () => onlineIds.size;
+// موصلون **قابلون للإسناد فعلاً**: متصلون ولديهم موقع GPS — الأساس الصادق لشرط «لا موصل»
+const assignableCount = () => { let n = 0; for (const id of onlineIds) { const d = drivers.get(id); if (d?.last && !d.sos) n++; } return n; };
 const pushStats = () => broadcastDrivers({ t: 'stats', online: onlineCount(), channel: 'العمليات العامة' });
 const pushOrderDelta = (o) => broadcastOps({ t: 'order_upd', order: orderPublic(o) });   // تحديث مفرد O(1)
 const pushDriverOrder = (driverId) => { const ws = driverWs(driverId); if (ws) send(ws, { t: 'order', order: driverActiveOrder(driverId) }); };
@@ -119,11 +121,12 @@ function reindexOrder(o, prevDriverId) {
   if (prevDriverId && driverToOrderId.get(prevDriverId) === o.id) driverToOrderId.delete(prevDriverId);
   if (TERMINAL.has(o.status)) {
     ACTIVE.delete(o.id);
-    pending.delete(o.id);
+    pending.delete(o.id); o._firstQueued = null;
     if (o.driverId && driverToOrderId.get(o.driverId) === o.id) { driverToOrderId.delete(o.driverId); setImmediate(pumpQueue); }  // تفرّغ موصل → اصرف الطابور
     o._evictAt = Date.now() + ORDER_RETAIN_MS;                  // يُخلى من orders لاحقاً
   } else {
     ACTIVE.set(o.id, o);
+    if (o.status !== 'new') { pending.delete(o.id); o._firstQueued = null; }   // غادر الطابور فور الإسناد (لا أولوية طابور شبحية)
     if (o.driverId) driverToOrderId.set(o.driverId, o.id);
   }
 }
@@ -314,7 +317,7 @@ async function rankByEta(cands, dest) {
 
 // ================= 🧕 تاليا — الموزعة الآلية =================
 // عند إنشاء طلب: تاليا تعرضه على أقرب موصل صوتياً ونصياً، مهلة للرد، رفض/صمت ← التالي، ٣ محاولات ← تصعيد للعمليات.
-const OFFER_TIMEOUT_MS = 25_000;
+const OFFER_TIMEOUT_MS = Number(process.env.OFFER_TIMEOUT_SEC || 25) * 1000;   // مهلة قبول العرض (قابلة للضبط)
 const MAX_OFFERS = 3;
 const havKm = (a, b) => { const R = 6371, dLa = (b.lat - a.lat) * Math.PI/180, dLo = (b.lng - a.lng) * Math.PI/180;
   const x = Math.sin(dLa/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLo/2)**2;
@@ -332,7 +335,7 @@ function dispatchCandidates(o) {
   const T = o.origin || o.dest;                                  // نقطة الالتقاط أولاً إن وُجد متجر (نمط Uber)
   const cands = [], destKey = cellOf(T.lat, T.lng), visited = new Set();
   const pick = (id) => { const d = drivers.get(id);
-    if (d?.last && d.online && !d.sos && !driverBusy(id)) cands.push({ id: d.id, name: d.name, km: havKm(d.last, T) }); };
+    if (d?.last && d.online && !d.sos && !driverBusy(id) && !offeredNow.has(id)) cands.push({ id: d.id, name: d.name, km: havKm(d.last, T) }); };
   for (let k = 0; k <= MAX_RING && cands.length < MAX_OFFERS * 2; k++)
     for (const key of cellDisk(destKey, k)) {
       if (visited.has(key)) continue; visited.add(key);
@@ -352,12 +355,14 @@ function beginOffer(o, cands) {
 }
 
 // ---------- طابور الانتظار: طلبات لم تجد موصلاً حرًّا، تُعاد المحاولة عند تفرّغ أي موصل ----------
-const pending = new Map();                 // orderId -> وقت الدخول للطابور
+const pending = new Map();                 // orderId -> وقت **أول** دخول للطابور (يُحفظ على الطلب فلا يُصفَّر مع كل دورة عرض)
+const offeredNow = new Set();              // 🛡️ موصلون يحملون عرضاً حياً الآن — يُستثنون من ترشيح طلب آخر (منع عرض مزدوج)
 const STALE_ESCALATE_MS = Number(process.env.STALE_ESCALATE_MIN || 5) * 60_000;   // تصعيد بشري (والمحاولة لا تتوقف)
 function enqueue(o) {
   if (o.status !== 'new') return;
   o._offer = null;
-  if (!pending.has(o.id)) { pending.set(o.id, Date.now()); setOrder(o, { offeredTo: null }); }
+  // زمن أول دخول للطابور محفوظ على الطلب ⟵ لا يُصفَّر مع كل دورة عرض، فيتراكم العمر ويقع التصعيد
+  if (!pending.has(o.id)) { pending.set(o.id, o._firstQueued ||= Date.now()); setOrder(o, { offeredTo: null }); }
 }
 // يصرف الطابور: يسند أقدم الطلبات المنتظرة إلى الموصلين الأحرار المتاحين الآن
 function pumpQueue() {
@@ -399,14 +404,16 @@ function offerNext(o) {
     return;
   }
   const c = of.cands[of.idx];
+  if (offeredNow.has(c.id)) { of.idx++; return offerNext(o); }    // 🛡️ محجوز لعرض حيّ من طلب آخر — تجاوزه (يسدّ فجوة الترتيب اللا-متزامن)
   setOrder(o, { offeredTo: c.name });
   const w = driverWs(c.id);
   if (!w) { of.idx++; return offerNext(o); }
+  offeredNow.add(c.id);                                           // 🛡️ احجز الموصل ما دام العرض حياً — لا يُعرض عليه طلب آخر
   send(w, { t: 'offer', order: { id: o.id, title: o.title, dest: o.dest }, km: Math.round(c.km * 10) / 10,
     etaMin: c.etaMin || null, expiresInS: OFFER_TIMEOUT_MS / 1000 });
   talyaSay(c.id, `طلب جديد: ${o.title}. ${c.etaMin ? `يبعد عنك ${c.etaMin} دقيقة بالطريق` : `يبعد عنك ${c.km.toFixed(1)} كيلومتر`}. اضغط قبول خلال ${OFFER_TIMEOUT_MS / 1000} ثانية.`);
   talyaFeed(`🎙 ${o.id}: أعرضه الآن على ${c.name} (${c.etaMin ? c.etaMin + ' د · ' : ''}${c.km.toFixed(1)} كم)${of.idx ? ` — المحاولة ${of.idx + 1}` : ''}…`);
-  of.timer = setTimeout(() => { of.idx++; offerNext(o); }, OFFER_TIMEOUT_MS);
+  of.timer = setTimeout(() => { offeredNow.delete(c.id); of.idx++; offerNext(o); }, OFFER_TIMEOUT_MS);
 }
 
 function answerOffer(o, driverId, accept) {
@@ -414,6 +421,7 @@ function answerOffer(o, driverId, accept) {
   const c = of?.cands[of.idx];
   if (!c || c.id !== driverId || o.status !== 'new') return;      // ليس المعروض عليه حالياً
   clearTimeout(of.timer);
+  offeredNow.delete(driverId);                                    // حرّر الحجز فور الرد
   if (accept) {
     // 🛡️ منع الإسناد المزدوج: إن صار للموصل طلب نشط بين العرض والقبول، ننتقل للتالي
     if (driverBusy(driverId)) { talyaFeed(`⚪ ${o.id}: ${c.name} انشغل بطلب آخر — أنتقل للتالي.`); of.idx++; return offerNext(o); }
@@ -437,7 +445,7 @@ function cancelOffer(o) {
   if (!o?._offer) return;
   clearTimeout(o._offer.timer);
   const c = o._offer.cands[o._offer.idx];
-  if (c) { const w = driverWs(c.id); if (w) send(w, { t: 'offer_cancel', orderId: o.id }); }
+  if (c) { offeredNow.delete(c.id); const w = driverWs(c.id); if (w) send(w, { t: 'offer_cancel', orderId: o.id }); }
   o._offer = null;
 }
 
@@ -531,13 +539,16 @@ function pushAll(title, body, tag) {
 
 // ---------- 💾 ديمومة الحالة عبر غرفة التشغيل (تخزينها دائم) — تنجو من إعادة النشر ----------
 // المتاجر والإحصاء اليومي يُنسخان احتياطياً إلى غرفة التشغيل عند كل تغيّر، ويُستعادان عند الإقلاع.
-let backupDirty = false;
+let backupDirty = false, restoreDone = false;   // 🛡️ لا ننسخ قبل اكتمال الاستعادة لئلا نطمس النسخة الجيدة بحالة فارغة
 function backupState() {
+  if (!restoreDone) return;
   if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
   pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${brainMemory.context.length} معلومة`);
   brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
     context: brainMemory.context, notes: brainMemory.notes, team: brainMemory.team, faq: brainMemory.faq,
-    goals: brainMemory.goals, memSeq, vapid, pushSubs: [...pushSubs.values()] } });
+    goals: brainMemory.goals, memSeq, vapid, pushSubs: [...pushSubs.values()],
+    // 🚚 الطلبات النشطة وإسناداتها تنجو من إعادة النشر — لا تُيتَّم توصيلة جارية
+    activeOrders: [...ACTIVE.values()].map(orderPublic), orderSeq } });
   backupDirty = false;
 }
 setInterval(() => { if (backupDirty) backupState(); }, 60_000).unref?.();
@@ -565,7 +576,22 @@ async function restoreState() {
     if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
     if (Array.isArray(b.pushSubs)) for (const s of b.pushSubs)
       if (s?.endpoint?.startsWith('https://') && s.keys?.p256dh && s.keys?.auth && !pushSubs.has(s.endpoint)) pushSubs.set(s.endpoint, s);
-    console.log(`[💾] استُعيدت الحالة: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة · ${pushSubs.size} هاتف مشترك`);
+    // 🚚 استعادة الطلبات النشطة: تُعاد للفهارس، والمُسنَدة تنتظر عودة الموصل، والجديدة يُعاد عرضها بعد الإقلاع
+    let restoredNew = 0;
+    if (Array.isArray(b.activeOrders)) {
+      orderSeq = Math.max(orderSeq, +b.orderSeq || 0,
+        ...b.activeOrders.map(o => +String(o.id || '').replace('ORD-', '') || 0));
+      for (const o of b.activeOrders) {
+        if (!o?.id || TERMINAL.has(o.status) || orders.has(o.id)) continue;
+        const ord = { ...o, _offer: null, updatedAt: Date.now() };
+        orders.set(ord.id, ord); ACTIVE.set(ord.id, ord);
+        if (ord.ref) refIndex.set(ord.ref, ord.id);
+        if (ord.driverId && ord.status !== 'new') driverToOrderId.set(ord.driverId, ord.id);  // يلتقطه الموصل عند عودته
+        if (ord.status === 'new') { ord.driverId = null; ord.driverName = null; restoredNew++; }  // بلا موصل ← يُعاد عرضه
+      }
+      if (restoredNew) setTimeout(() => { for (const o of ACTIVE.values()) if (o.status === 'new' && !o._offer) startDispatch(o); }, 4000);
+    }
+    console.log(`[💾] استُعيدت الحالة: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة · ${pushSubs.size} هاتف مشترك · ${ACTIVE.size} طلب نشط`);
   } catch { /* أفضل-جهد — يعمل بلا استعادة */ }
 }
 
@@ -699,7 +725,7 @@ function prAction(id, action, by, note) {
 function prConditionActive(p) {
   switch (p.type) {
     case 'sos':         return !!drivers.get(p.driverId)?.sos;
-    case 'no_drivers':  return ACTIVE.size > 0 && onlineCount() === 0;
+    case 'no_drivers':  return ACTIVE.size > 0 && assignableCount() === 0;
     case 'queue':       return pending.has(p.orderId);
     case 'dispatch':    return orders.get(p.orderId)?.status === 'new';
     case 'stuck':       { const o = orders.get(p.orderId); return !!o && o.status === 'assigned' && Date.now() - o.updatedAt > STUCK_ASSIGNED_MS; }
@@ -748,9 +774,11 @@ function prSweep() {
   pulse('👁 الراصد — التحقق والتصعيد', `${openPriorities().length} أولوية مفتوحة · ${pending.size} بالطابور`);
   try { autoRecover(now); } catch (e) { console.error('[autoRecover]', e?.message); }
   // (1) كواشف استباقية من الحالة الحية — تفتح وتعيد التسعير ديناميكياً
-  if (ACTIVE.size > 0 && onlineCount() === 0)
-    prOpen('no_drivers', { type: 'no_drivers', score: 92, title: `${ACTIVE.size} طلب نشط بلا أي موصل متصل`,
-      recommendedAction: 'شغّلوا أجهزة الموصلين فوراً أو نادوا موصلاً احتياطياً', assignedRole: 'operations' });
+  if (ACTIVE.size > 0 && assignableCount() === 0)
+    prOpen('no_drivers', { type: 'no_drivers', score: 92,
+      title: `${ACTIVE.size} طلب نشط بلا موصل قابل للإسناد${onlineCount() ? ' (متصلون بلا موقع GPS)' : ''}`,
+      recommendedAction: onlineCount() ? 'الموصلون متصلون بلا GPS — اطلبوا تفعيل الموقع، أو نادوا موصلاً جاهزاً' : 'شغّلوا أجهزة الموصلين فوراً أو نادوا موصلاً احتياطياً',
+      assignedRole: 'operations' });
   for (const [oid, since] of pending) {
     const ageMin = (now - since) / 60_000;
     const o = orders.get(oid); if (!o) continue;
@@ -1279,6 +1307,21 @@ function rateOk(req, limit) {
   if (RL.size > 5000) for (const [k, v] of RL) if (now > v.resetAt) RL.delete(k);   // كنس المنتهي فقط لا مسح الكل
   return ++e.n <= limit;
 }
+// 🛡️ حماية من تخمين الرمز: حدّ محاولات فاشلة لكل IP بالدقيقة — يُصفَّر فور النجاح فلا يُقفل مشغّل شرعي أبداً
+// يُرجع 0 (سليم) · 401 (رمز خاطئ) · 429 (تجاوز الحد). الافتراضي 20/دقيقة يكبح التخمين (10000 رمز ≈ 8 ساعات) دون إزعاج البشر.
+const PIN_MAX_PER_MIN = Number(process.env.PIN_MAX_PER_MIN || 20);
+const pinAttempts = new Map();           // ip -> {n, resetAt} — محاولات فاشلة بالنافذة الحالية
+function pinGate(req, raw, expected) {
+  const ip = clientIp(req), now = Date.now();
+  let e = pinAttempts.get(ip);
+  if (!e || now > e.resetAt) { e = { n: 0, resetAt: now + 60_000 }; pinAttempts.set(ip, e); }
+  if (pinAttempts.size > 5000) for (const [k, v] of pinAttempts) if (now > v.resetAt) pinAttempts.delete(k);
+  if (e.n >= PIN_MAX_PER_MIN) return 429;                        // تجاوز محاولات الرمز الفاشلة بالدقيقة
+  if (pinOk(raw, expected)) { pinAttempts.delete(ip); return 0; }  // نجاح ⟵ صفّر العدّاد (المشغّل الشرعي لا يُقفل)
+  e.n++;
+  return 401;
+}
+const pinErr = (code) => ({ error: code === 429 ? 'محاولات كثيرة — انتظر دقيقة ثم أعد المحاولة' : 'bad pin' });
 const STAGE_AR = { new: 'استلمنا طلبك، وتاليا تبحث عن أقرب موصل', assigned: 'موصلك بالطريق لاستلام طلبك من المتجر',
   picked: 'طلبك بالطريق إليك الآن 🛵', delivered: 'وصل طلبك — بالهناء والشفاء! ✓', cancelled: 'أُلغي هذا الطلب' };
 const findByRef = (q) => { const ref = String(q || '').trim(); if (!ref) return null;
@@ -1304,12 +1347,12 @@ async function handleHttp(req, res) {
   const json = (code, obj) => { res.writeHead(code, { 'content-type': 'application/json', 'access-control-allow-origin': '*', 'access-control-allow-headers': 'content-type,x-api-key' }); res.end(JSON.stringify(obj)); };
 
   if (req.method === 'OPTIONS') return json(204, {});
-  if (url.pathname === '/api/health')
+  if (url.pathname === '/api/health' && req.method === 'GET')
     return json(200, { ok: true, v: BUILD_TAG, upMin: Math.round(process.uptime() / 60), drivers: drivers.size, online: onlineCount(),
       // تشخيص الرموز بلا كشف قيمها إطلاقاً: منطقيّات فقط، ولا نطبع القيمة الافتراضية للعلن
       pins: { opsPinSet: Boolean(process.env.OPS_PIN), driverPinSet: Boolean(process.env.DYAR_PIN),
               usingDefault: !process.env.OPS_PIN && !process.env.DYAR_PIN } });
-  if (url.pathname === '/api/config')                          // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
+  if (url.pathname === '/api/config' && req.method === 'GET')   // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
     return json(200, { hexKm: HEX_KM });
 
   // ===== 🌐 بوابة العملاء العامة (نمط Jarvis Helpdesk): تتبع فوري + إجابات بلا مكالمة =====
@@ -1349,13 +1392,13 @@ async function handleHttp(req, res) {
 
   // ===== 📺 شاشة عقل ديار (kiosk) — محمية برمز اللوحة OPS_PIN =====
   if (url.pathname === '/api/brain/summary' && req.method === 'GET') {
-    if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     const s = brainSummary();
     return json(200, { ...s, priorities: brainPriorities(s), ai: Boolean(process.env.ANTHROPIC_API_KEY) });
   }
   if (url.pathname === '/api/brain/ask' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     const q = String(b.q || '').slice(0, 300);
     const s = brainSummary();
     if (!q) return json(400, { error: 'q required' });
@@ -1368,7 +1411,7 @@ async function handleHttp(req, res) {
   // 🎙 صوت تاليا الحقيقي (ElevenLabs عبر غرفة التشغيل) — كاش محلي يحمي الرصيد والزمن
   if (url.pathname === '/api/brain/tts' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     const text = String(b.text || '').replace(/\s+/g, ' ').trim().slice(0, 600);
     if (!text) return json(400, { error: 'text required' });
     const hit = ttsCache.get(text);
@@ -1393,13 +1436,13 @@ async function handleHttp(req, res) {
 
   // 📳 تنبيهات الهاتف: مفتاح الاشتراك + تسجيل جهاز + فحص — وضع المشغّل الواحد
   if (url.pathname === '/api/push/key' && req.method === 'GET') {
-    if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     ensureVapid();
     return json(200, { key: vapid.pub, devices: pushSubs.size });
   }
   if (url.pathname === '/api/push/subscribe' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     const s = b.sub;
     if (!s?.endpoint?.startsWith('https://') || !s.keys?.p256dh || !s.keys?.auth || pushSubs.size >= 20)
       return json(400, { error: 'اشتراك غير صالح' });
@@ -1410,28 +1453,28 @@ async function handleHttp(req, res) {
   }
   if (url.pathname === '/api/push/test' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     pushAll('📳 فحص تنبيهات ديار', 'ممتاز — العاجل والتصعيدات والإحاطات ستصلك هنا أينما كنت.', 'test');
     return json(200, { ok: true, devices: pushSubs.size });
   }
 
   // أولويات مفتوحة + مغلقة حديثاً + حمل الفريق — لأي واجهة (تلفاز/حاسوب/هاتف)
   if (url.pathname === '/api/brain/priorities' && req.method === 'GET') {
-    if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     return json(200, { asOf: Date.now(), open: openPriorities(), counts: openCounts(),
       recentClosed: prClosed.slice(-20).reverse(), load: teamLoad(), staff: STAFF });
   }
   // إجراء على أولوية من أي واجهة: {pin, id, action: ack|start|resolve|reassign, who, note}
   if (url.pathname === '/api/brain/priority-action' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     const p = prAction(String(b.id || ''), String(b.action || ''), b.who, b.note);
     return p ? json(200, { ok: true, priority: prPublic(p) }) : json(400, { error: 'إجراء أو معرّف غير صالح' });
   }
 
   // 🧠 ذاكرة العقل كاملة للوحة (لوحة المهام + خريطة المعرفة) — قراءة محمية بالرمز
   if (url.pathname === '/api/brain/memory' && req.method === 'GET') {
-    if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     return json(200, { notes: brainMemory.notes, context: brainMemory.context, faq: brainMemory.faq,
       team: brainMemory.team, goals: brainMemory.goals,
       stores: [...stores.values()].map(x => ({ id: x.id, name: x.name })), asOf: Date.now() });
@@ -1439,7 +1482,7 @@ async function handleHttp(req, res) {
   // 📋 لوحة المهام: تحريك ملاحظة بين الأعمدة {pin, n, st: open|doing|done} — «أنجزت الملاحظة N» صوتياً يبقى يحذف
   if (url.pathname === '/api/brain/note-status' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     const st = String(b.st || '');
     if (!['open', 'doing', 'done'].includes(st)) return json(400, { error: 'st غير صالح' });
     const note = brainMemory.notes.find(x => x.n === +b.n);
@@ -1450,7 +1493,7 @@ async function handleHttp(req, res) {
   // 📥 تفريغ للعقل: نص حر (أو ملف نصي) ⟵ كل سطر يُصنَّف تلقائياً: ملاحظة/للعملاء/هدف/معرفة شركة
   if (url.pathname === '/api/brain/dump' && req.method === 'POST') {
     const b = await readBody(req);
-    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
     const lines = String(b.text || '').slice(0, 20000).split(/\n+/).map(x => x.trim()).filter(x => x.length >= 3);
     if (!lines.length) return json(400, { error: 'نص فارغ' });
     const by = String(b.by || '').slice(0, 40);
@@ -1472,7 +1515,7 @@ async function handleHttp(req, res) {
 
   // ===== REST للوحة العقل (مفتاح API) =====
   if (url.pathname.startsWith('/api/v1/')) {
-    if (!pinOk(req.headers['x-api-key'], BRAIN_API_KEY)) return json(401, { error: 'bad api key' });
+    { const g = pinGate(req, req.headers['x-api-key'], BRAIN_API_KEY); if (g) return json(g, g === 429 ? pinErr(g) : { error: 'bad api key' }); }
 
     // مواقع وحالة كل الموصلين — تستهلكها صفحات الطلبات/المكالمات في غرفة التشغيل
     if (url.pathname === '/api/v1/drivers' && req.method === 'GET')
@@ -1508,9 +1551,10 @@ async function handleHttp(req, res) {
       const lat = +b.dest?.lat, lng = +b.dest?.lng;
       if (!b.title || !Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180)
         return json(400, { error: 'title و dest{lat,lng} مطلوبة' });
-      if (ref && refIndex.has(ref)) {                          // نفس الطلب وصل مرتين — لا ازدواج
+      if (ref && refIndex.has(ref)) {                          // نفس الطلب وصل مرتين — لا ازدواج (إلا إن كان الأول قد أُغلق)
         const ex = orders.get(refIndex.get(ref));
-        if (ex) return json(200, { ok: true, dedup: true, order: orderPublic(ex) });
+        if (ex && !TERMINAL.has(ex.status)) return json(200, { ok: true, dedup: true, order: orderPublic(ex) });
+        if (ex) refIndex.delete(ref);                          // الطلب القديم بنفس الرقم أُنجز/أُلغي ⟵ اسمح بطلب جديد
       }
       if (ACTIVE.size >= 5000) return json(429, { error: 'حد الطلبات النشطة' });
       const o = { id: 'ORD-' + (++orderSeq), ref, title: String(b.title).slice(0, 80),
@@ -1578,15 +1622,18 @@ function msgOk(ws) {
   if (now > (ws._rlAt || 0)) { ws._rlAt = now + 1000; ws._rlN = 0; }
   return ++ws._rlN <= 40;                  // حتى 40 رسالة/ثانية لكل مقبس — أكثر من كافٍ لـ GPS الطبيعي
 }
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
+  const ipReq = { headers: req?.headers || {}, socket: req?.socket };   // 🛡️ لبوابة قفل التخمين على المصافحة
 
   ws.once('message', (raw) => {
     let hello; try { hello = JSON.parse(raw); } catch { return ws.close(4000, 'bad json'); }
     if (hello.t !== 'hello') return ws.close(4000, 'bad hello');
-    // 🛡️ رمزان منفصلان: OPS_PIN لغرفة العمليات، DYAR_PIN للأجهزة — مقارنة timing-safe
-    if (!pinOk(hello.pin, hello.role === 'ops' ? OPS_PIN : PIN)) return ws.close(4001, 'bad pin');
+    // 🛡️ رمزان منفصلان + قفل تخمين لكل IP: OPS_PIN لغرفة العمليات، DYAR_PIN للأجهزة — مقارنة timing-safe
+    const g = pinGate(ipReq, hello.pin, hello.role === 'ops' ? OPS_PIN : PIN);
+    if (g === 429) return ws.close(4029, 'too many attempts');
+    if (g) return ws.close(4001, 'bad pin');
 
     // ===== لوحة التحكم =====
     if (hello.role === 'ops') {
@@ -1679,6 +1726,13 @@ wss.on('connection', (ws) => {
         }
         const o = m.orderId && orders.get(m.orderId);
         if (m.t === 'order_assign' && o && !TERMINAL.has(o.status) && drivers.has(m.driverId)) {
+          // 🛡️ لا تدهس طلب موصل مشغول: الإسناد لموصل يحمل طلباً آخر ييتّم طلبه السابق — ارفض وأبلغ العمليات
+          const busyWith = driverToOrderId.get(m.driverId);
+          if (busyWith && busyWith !== o.id) {
+            send(ws, { t: 'assign_reject', orderId: o.id, driverId: m.driverId,
+              reason: `${drivers.get(m.driverId).name} مشغول بالطلب ${busyWith} — حرّروه أولاً أو اختاروا موصلاً آخر` });
+            return;
+          }
           cancelOffer(o);                                        // الإسناد اليدوي يوقف عرض تاليا الجاري
           const prev = o.driverId;
           if (prev === m.driverId) return;                       // مُسنَد له أصلاً
@@ -1808,7 +1862,15 @@ setInterval(() => {
 // ---------- إقلاع ----------
 // فشل الاستماع (منفذ مشغول/صلاحيات) قاتل — لا نتركه لحارس uncaught فيبقى المسار «حيّاً» بلا خدمة
 server.on('error', (e) => { console.error('[fatal] تعذر الاستماع:', e.message); process.exit(1); });
-server.listen(PORT, () => {
+// 🛡️ الإقلاع الآمن: نستعيد الحالة ونهيّئ المفاتيح والفريق قبل قبول أي طلب — لا سباق يطمس البيانات المحفوظة
+async function boot() {
+  await restoreState().catch(() => {});   // أفضل-جهد — يعمل بلا استعادة
+  ensureVapid();                          // مفاتيح VAPID المحفوظة تفوز؛ تُولَّد جديدة فقط إن لم تُستعد
+  seedTeam();                             // الفريق المحفوظ يفوز؛ يُزرع الافتراضي فقط إن كان فارغاً
+  restoreDone = true;                     // من الآن يُسمح بالنسخ الاحتياطي
+  server.listen(PORT, onListen);
+}
+function onListen() {
   const proto = useTls ? 'https' : 'http';
   const lans = Object.values(networkInterfaces()).flat()
     .filter(i => i && i.family === 'IPv4' && !i.internal).map(i => i.address);
@@ -1826,5 +1888,5 @@ server.listen(PORT, () => {
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');
   registerWithBrain();   // ربط ذاتي فوري بغرفة التشغيل
-  restoreState().then(() => { ensureVapid(); seedTeam(); });   // 💾 الاستعادة ثم المفاتيح وزرع الفريق
-});
+}
+boot();

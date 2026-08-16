@@ -288,6 +288,18 @@
   const drivers = new Map(), ordersM = new Map();
   const routeCache = new Map();            // orderId -> {geometry, km, min, from:[lng,lat], at}
   let selected = null, selectedOrder = null, map, ws, pin = sessionStorage.pin || '';
+  // 🛡️ إرسال محمي: لا يرمي على مقبس مغلق أثناء إعادة الاتصال — يخطر المستخدم بدل الفشل الصامت
+  function wsSend(obj) {
+    if (ws && ws.readyState === 1) { ws.send(JSON.stringify(obj)); return true; }
+    toast('لا اتصال بغرفة العمليات الآن — جارٍ إعادة الوصل، أعد المحاولة بعد ثانية'); return false;
+  }
+  function toast(msg) {
+    let t = document.getElementById('opsToast');
+    if (!t) { t = document.createElement('div'); t.id = 'opsToast';
+      t.style.cssText = 'position:fixed;bottom:18px;left:50%;transform:translateX(-50%);z-index:9999;background:#2b3245;color:#e9ebf1;border:1px solid #3a445a;padding:10px 16px;border-radius:12px;font-size:13px;box-shadow:0 4px 14px rgba(0,0,0,.4);max-width:80vw;text-align:center';
+      document.body.appendChild(t); }
+    t.textContent = msg; t.style.display = 'block'; clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = 'none', 4000);
+  }
   let picking = false, pickedDest = null;
   const destMarkers = new Map();           // orderId -> Marker
 
@@ -480,8 +492,9 @@
       avgMin: mins.length ? Math.round(mins.reduce((x, y) => x + y, 0) / mins.length) : null };
   };
   function upsertStore(s) {
+    if (!map) { storesM.set(s.id, { store: s, marker: null, el: null }); return; }   // 🛡️ الخريطة لم تُحمَّل — احفظ المتجر بلا إسقاط المعالج
     let rec = storesM.get(s.id);
-    if (!rec) {
+    if (!rec || !rec.marker) {
       const el = document.createElement('div');
       el.className = 'store-marker'; el.innerHTML = '🏪<span class="scount"></span>';
       el.addEventListener('click', ev => { ev.stopPropagation(); openStorePop(s.id); });
@@ -493,6 +506,7 @@
   }
   function refreshStoreBadges() {          // شارة عدد الطلبات النشطة فوق كل متجر
     for (const rec of storesM.values()) {
+      if (!rec.el) continue;               // 🛡️ متجر محفوظ بلا معالج (الخريطة لم تُحمَّل) — تخطَّ الشارة
       const n = storeStats(rec.store.id).active;
       const b = rec.el.querySelector('.scount');
       b.style.display = n ? 'block' : 'none'; b.textContent = n;
@@ -515,9 +529,9 @@
   window.zoomStore = (id) => { const r = storesM.get(id); if (r && map) map.flyTo({ center: [r.store.lng, r.store.lat], zoom: 15.5, duration: 700 }); };
   window.renameStore = (id) => { const r = storesM.get(id); if (!r) return;
     const n = (prompt('الاسم الجديد (كما يظهر في عناوين الطلبات):', r.store.name) || '').trim();
-    if (n) ws.send(JSON.stringify({ t: 'store_rename', id, name: n })); };
+    if (n) wsSend({ t: 'store_rename', id, name: n }); };
   window.removeStore = (id) => { const r = storesM.get(id); if (r && confirm('حذف المتجر «' + r.store.name + '» من الخريطة؟'))
-    ws.send(JSON.stringify({ t: 'store_remove', id })); };
+    wsSend({ t: 'store_remove', id }); };
   function openStorePop(id) {
     const rec = storesM.get(id); if (!rec) return;
     const st = storeStats(id), s = rec.store;
@@ -529,9 +543,9 @@
       <div class="r"><span>متوسط زمن التوصيل</span><b>${st.avgMin != null ? st.avgMin + ' د' : '—'}</b></div>
       <div class="acts"><button data-a="rename">✏️ تسمية</button><button data-a="remove">🗑 حذف</button></div>`;
     div.querySelector('[data-a="rename"]').onclick = () => { const n = (prompt('الاسم الجديد:', s.name) || '').trim();
-      if (n) ws.send(JSON.stringify({ t: 'store_rename', id, name: n })); popup.remove(); };
+      if (n) wsSend({ t: 'store_rename', id, name: n }); popup.remove(); };
     div.querySelector('[data-a="remove"]').onclick = () => { if (confirm('حذف المتجر «' + s.name + '» من الخريطة؟'))
-      ws.send(JSON.stringify({ t: 'store_remove', id })); popup.remove(); };
+      wsSend({ t: 'store_remove', id }); popup.remove(); };
     const popup = new maplibregl.Popup({ offset: 26, closeButton: true }).setLngLat([s.lng, s.lat]).setDOMContent(div).addTo(map);
   }
   function upsertDestMarker(o) {
@@ -557,7 +571,7 @@
     $('cOn').textContent = arr.filter(d => d.online).length;
     $('cOff').textContent = arr.filter(d => !d.online).length;
     $('cBusy').textContent = arr.filter(d => d.online && activeOrderOf(d.id)).length;
-    if (!arr.length) return;
+    if (!arr.length) { $('dlist').innerHTML = '<div class="empty">لا أجهزة موصلين مسجّلة بعد — كل جهاز يفتح صفحة السائق يظهر هنا فورًا.</div>'; return; }
     $('dlist').innerHTML = arr.map(d => {
       const acc = d.last?.acc, accCls = acc == null ? '' : acc <= 8 ? 'acc-good' : acc <= 25 ? 'acc-mid' : 'acc-bad';
       const o = activeOrderOf(d.id);
@@ -586,13 +600,13 @@
       const id = act.dataset.id, d = drivers.get(id);
       if (act.dataset.act === 'rename') {
         const name = prompt('الاسم الجديد للموصل:', d?.name || '');
-        if (name?.trim()) ws.send(JSON.stringify({ t: 'device_rename', id, name: name.trim() }));
+        if (name?.trim()) wsSend({ t: 'device_rename', id, name: name.trim() });
       } else if (act.dataset.act === 'kick') {
         if (confirm('فصل جهاز «' + (d?.name || id) + '» فورًا؟ (لجهاز مفقود أو خاطئ)'))
-          ws.send(JSON.stringify({ t: 'device_kick', id }));
+          wsSend({ t: 'device_kick', id });
       } else if (act.dataset.act === 'remove') {
         if (confirm('حذف «' + (d?.name || id) + '» من السجل؟'))
-          ws.send(JSON.stringify({ t: 'device_remove', id }));
+          wsSend({ t: 'device_remove', id });
       }
       return;
     }
@@ -620,6 +634,10 @@
     renderOrders();
   });
   function renderOrders() {
+    // 🛡️ لا تُعِد بناء القائمة أثناء فتح قائمة إسناد منسدلة أو أثناء الكتابة في البحث — يغلقها/يقطع الكتابة
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'SELECT' || (ae.tagName === 'INPUT' && ae.id !== 'ordSearch')) && $('olist')?.contains(ae)) { renderOrders._skipped = true; return; }
+    renderOrders._skipped = false;
     const qs = ($('ordSearch')?.value || '').trim();
     const match = (o) => !qs || [o.id, o.ref, o.title, o.driverName].some(v => v && String(v).includes(qs));
     const allAct = [...ordersM.values()];
@@ -672,13 +690,15 @@
   }
   $('olist').addEventListener('change', e => {
     const sel = e.target.closest('select[data-assign]');
-    if (sel && sel.value) { ws.send(JSON.stringify({ t: 'order_assign', orderId: sel.dataset.assign, driverId: sel.value })); selectOrder(sel.dataset.assign, true); }
+    if (sel && sel.value) { wsSend({ t: 'order_assign', orderId: sel.dataset.assign, driverId: sel.value }); selectOrder(sel.dataset.assign, true); }
   });
+  // إن أُجّل تحديث القائمة أثناء فتح قائمة إسناد، أعِد بناءها فور إغلاقها لعرض آخر حالة
+  $('olist').addEventListener('focusout', () => { if (renderOrders._skipped) setTimeout(() => { if (!$('olist').contains(document.activeElement)) renderOrders(); }, 50); });
   $('olist').addEventListener('click', e => {
     const tr = e.target.closest('[data-track]'), cn = e.target.closest('[data-cancel]'), rd = e.target.closest('[data-redispatch]');
     if (tr) selectOrder(tr.dataset.track, true);
-    else if (rd) ws.send(JSON.stringify({ t: 'order_redispatch', orderId: rd.dataset.redispatch }));
-    else if (cn) ws.send(JSON.stringify({ t: 'order_status', orderId: cn.dataset.cancel, status: 'cancelled' }));
+    else if (rd) wsSend({ t: 'order_redispatch', orderId: rd.dataset.redispatch });
+    else if (cn) wsSend({ t: 'order_status', orderId: cn.dataset.cancel, status: 'cancelled' });
     else { const card = e.target.closest('.order'); if (card && !e.target.closest('select')) selectOrder(card.dataset.id); }
   });
   async function selectOrder(id, fit) {
@@ -705,7 +725,7 @@
     if (placingStore) {                                          // 🏪 متجر جديد بالموقع المنقور
       placingStore = false;
       const name = (prompt('اسم المتجر (كما يظهر في عناوين الطلبات — للربط الآلي):') || '').trim();
-      if (name) ws.send(JSON.stringify({ t: 'store_add', name, lat: e.lngLat.lat, lng: e.lngLat.lng }));
+      if (name) wsSend({ t: 'store_add', name, lat: e.lngLat.lat, lng: e.lngLat.lng });
       return;
     }
     pickedDest = { lat: e.lngLat.lat, lng: e.lngLat.lng };
@@ -716,7 +736,7 @@
   $('ordCreate').onclick = () => {
     const title = $('ordTitle').value.trim();
     if (!title || !pickedDest) return;
-    ws.send(JSON.stringify({ t: 'order_create', title, dest: pickedDest }));
+    wsSend({ t: 'order_create', title, dest: pickedDest });
     orderDlg.close();
     document.querySelector('[data-p="orders"]').click();
   };
@@ -790,9 +810,11 @@
         feedAdd('🚨 طوارئ', m.name);
       }
       else if (m.t === 'sos_clear') { const d = drivers.get(m.id); if (d) d.sos = false; $('sosBanner').style.display = 'none'; }
+      // 🛡️ تحديث انتقائي: قائمة الطلبات تُعاد فقط عند تغيّرها فعلاً — لا تُهدَم مع كل نبضة GPS (تغلق قائمة الإسناد)
+      const ordersMsg = ['snapshot', 'orders', 'order_upd'].includes(m.t);
       for (const d of drivers.values()) upsertMarker(d);
       for (const o of ordersM.values()) upsertDestMarker(o);
-      renderDrivers(); renderOrders(); redrawLayers();
+      renderDrivers(); if (ordersMsg) renderOrders(); redrawLayers();
     };
     ws.onclose = e => {
       if (e.code === 4001) { sessionStorage.removeItem('pin'); askPin('رمز غير صحيح — أعد المحاولة'); return; }
@@ -839,7 +861,7 @@
   }
   window.prioAct = (id, action) => {
     const note = action === 'resolve' ? (prompt('ما النتيجة؟ (تُسجَّل في سجل الأولوية)') || 'عولجت') : undefined;
-    ws && ws.send(JSON.stringify({ t: 'priority_action', id, action, who: myName(), note }));
+    wsSend({ t: 'priority_action', id, action, who: myName(), note });
   };
   setInterval(renderPrio, 30_000);   // تحديث الأعمار
 
@@ -1115,18 +1137,19 @@
       g.gain.setValueAtTime(.3, ctx.currentTime + i * .35);
       o.start(ctx.currentTime + i * .35); o.stop(ctx.currentTime + i * .35 + .22); }
   } catch {} }
-  $('sosAck').onclick = () => ws && ws.send(JSON.stringify({ t: 'sos_clear', id: $('sosAck').dataset.id }));
+  $('sosAck').onclick = () => wsSend({ t: 'sos_clear', id: $('sosAck').dataset.id });
   $('annSend').onclick = () => { const v = $('annText').value.trim(); if (!v) return;
-    ws.send(JSON.stringify({ t: 'announce', text: v, speak: true })); feedAdd('📢 أنت', v); $('annText').value = ''; };
+    wsSend({ t: 'announce', text: v, speak: true }); feedAdd('📢 أنت', v); $('annText').value = ''; };
   $('annText').addEventListener('keydown', e => e.key === 'Enter' && $('annSend').click());
 
   // ================= تحدث لكل الأجهزة =================
-  let opsRec = null, opsChunks = [], opsStream = null, opsStart = 0;
+  let opsRec = null, opsChunks = [], opsStream = null, opsStart = 0, opsHeld = false;   // 🛡️ opsHeld: هل الزر ما زال مضغوطاً؟
   const talkBtn = $('talkBtn');
   talkBtn.addEventListener('pointerdown', async () => {
+    opsHeld = true;
     if (!opsStream) { try { opsStream = await navigator.mediaDevices.getUserMedia({ audio: true }); }
-      catch { talkBtn.textContent = '🎙 المايك مرفوض'; return; } }
-    if (opsRec) return;
+      catch { talkBtn.textContent = '🎙 المايك مرفوض'; opsHeld = false; return; } }
+    if (opsRec || !opsHeld) return;                          // أُفلت الزر أثناء تهيئة المايك ⟵ لا تبدأ التسجيل
     opsChunks = []; opsStart = Date.now();
     try { opsRec = new MediaRecorder(opsStream, { mimeType: 'audio/webm;codecs=opus', audioBitsPerSecond: 24000 }); }
     catch { opsRec = new MediaRecorder(opsStream); }
@@ -1138,13 +1161,15 @@
       if (dur < 300 || !blob.size) return;
       const b64 = await new Promise(r => { const fr = new FileReader();
         fr.onload = () => r(fr.result.split(',')[1]); fr.readAsDataURL(blob); });
-      ws && ws.send(JSON.stringify({ t: 'voice', mime: blob.type, data: b64, dur }));
+      wsSend({ t: 'voice', mime: blob.type, data: b64, dur });
       feedAdd('🎙 أنت (العمليات)', 'أُرسل بث (' + (dur/1000).toFixed(1) + ' ث)');
     };
     opsRec.start();
+    if (!opsHeld) { opsRec.stop(); return; }                 // سباق: أُفلت الزر بين إنشاء المسجّل وبدئه ⟵ أوقف فوراً
     talkBtn.textContent = '🔴 يبث…'; talkBtn.style.borderColor = 'var(--alert)';
   });
   ['pointerup','pointercancel','pointerleave'].forEach(ev => talkBtn.addEventListener(ev, () => {
+    opsHeld = false;
     if (opsRec && opsRec.state !== 'inactive') opsRec.stop();
     talkBtn.textContent = '🎙 تحدث'; talkBtn.style.borderColor = 'var(--line)';
   }));
