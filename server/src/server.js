@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'agents-branch-1';    // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
+const BUILD_TAG = 'founderos-2';        // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -438,10 +438,13 @@ function cancelOffer(o) {
 
 // ---------- 🤖 نبض الوكلاء + حالة الوصلات الصادقة (لا ضوء أخضر مزيف) ----------
 const agentPulse = {};    // اسم الوكيل -> {runs, lastAt, note} — كل وكيل يوثق آخر عمل قام به
+const agentFeed = [];     // 🛰 السجل التسلسلي الحي لأعمال الوكلاء (أحدث 80) — يُعرض باللوحة لحظة بلحظة
 function pulse(name, note) {
   const a = (agentPulse[name] ||= { runs: 0, lastAt: 0, note: '' });
   a.runs++; a.lastAt = Date.now();
   if (note) a.note = String(note).slice(0, 90);
+  agentFeed.push({ at: Date.now(), agent: name, note: String(note || '').slice(0, 90) });
+  if (agentFeed.length > 80) agentFeed.shift();
 }
 const linkState = { brainOkAt: 0, brainErrAt: 0, backupAt: 0 };
 const linksPublic = () => ({
@@ -895,6 +898,8 @@ function brainSummary() {
     cells: cellDrivers.size, topCells: liveIndex().slice(0, 5),      // الفهرس الجغرافي الحي
     goal: brainMemory.goals.dailyOrders || 0, notesOpen: brainMemory.notes.length,
     agents: agentPulse, links: linksPublic(),                        // شفافية الوكلاء والوصلات
+    feed: agentFeed.slice(-30).reverse(),                            // سجل النشاط الحي — الأحدث أولاً
+    week: Array.from({ length: 7 }, (_, i) => ({ d: dateKey(6 - i), ...statsFor(6 - i) })),  // آخر 7 أيام
     wx: wx.at ? { t: wx.t, tmax: wx.tmax, rain: wx.rain, wind: wx.wind } : null,
   };
 }
@@ -1403,6 +1408,47 @@ async function handleHttp(req, res) {
     if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
     const p = prAction(String(b.id || ''), String(b.action || ''), b.who, b.note);
     return p ? json(200, { ok: true, priority: prPublic(p) }) : json(400, { error: 'إجراء أو معرّف غير صالح' });
+  }
+
+  // 🧠 ذاكرة العقل كاملة للوحة (لوحة المهام + خريطة المعرفة) — قراءة محمية بالرمز
+  if (url.pathname === '/api/brain/memory' && req.method === 'GET') {
+    if (!pinOk(req.headers['x-kiosk-pin'], OPS_PIN)) return json(401, { error: 'bad pin' });
+    return json(200, { notes: brainMemory.notes, context: brainMemory.context, faq: brainMemory.faq,
+      team: brainMemory.team, goals: brainMemory.goals,
+      stores: [...stores.values()].map(x => ({ id: x.id, name: x.name })), asOf: Date.now() });
+  }
+  // 📋 لوحة المهام: تحريك ملاحظة بين الأعمدة {pin, n, st: open|doing|done} — «أنجزت الملاحظة N» صوتياً يبقى يحذف
+  if (url.pathname === '/api/brain/note-status' && req.method === 'POST') {
+    const b = await readBody(req);
+    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    const st = String(b.st || '');
+    if (!['open', 'doing', 'done'].includes(st)) return json(400, { error: 'st غير صالح' });
+    const note = brainMemory.notes.find(x => x.n === +b.n);
+    if (!note) return json(404, { error: 'لا ملاحظة بهذا الرقم' });
+    note.st = st; backupDirty = true;
+    return json(200, { ok: true, note });
+  }
+  // 📥 تفريغ للعقل: نص حر (أو ملف نصي) ⟵ كل سطر يُصنَّف تلقائياً: ملاحظة/للعملاء/هدف/معرفة شركة
+  if (url.pathname === '/api/brain/dump' && req.method === 'POST') {
+    const b = await readBody(req);
+    if (!pinOk(b.pin, OPS_PIN)) return json(401, { error: 'bad pin' });
+    const lines = String(b.text || '').slice(0, 20000).split(/\n+/).map(x => x.trim()).filter(x => x.length >= 3);
+    if (!lines.length) return json(400, { error: 'نص فارغ' });
+    const by = String(b.by || '').slice(0, 40);
+    const added = { context: 0, notes: 0, faq: 0, goal: 0 };
+    for (const ln of lines.slice(0, 60)) {
+      const n = ln.replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
+      let m;
+      if ((m = n.match(/الهدف\s*(?:اليومي)?\s*(\d{1,4})/))) { brainMemory.goals.dailyOrders = +m[1]; added.goal++; }
+      else if (/^(?:ملاحظ[هة]|مهم[هة]|تذكير)(?:\s|[:：])|لا تنس|متابع[هة]\s*[:：]/.test(n)) {   // ملاحظة: \b لا يعمل مع العربية
+        memAdd('notes', ln.replace(/^(?:ملاحظة|ملاحظه|مهمة|مهمه|تذكير)\s*[:：]?\s*/, ''), by); added.notes++;
+      } else if (/^للعملاء|العملاء\s*[:：]/.test(n)) {
+        memAdd('faq', ln.replace(/^للعملاء\s*[:：]?\s*/, ''), by); added.faq++;
+      } else { memAdd('context', ln, by); added.context++; }
+    }
+    backupDirty = true;
+    pulse('💾 الحافظ — الديمومة', `تفريغ للعقل: ${lines.length} سطر (${added.notes} مهمة · ${added.context} معرفة · ${added.faq} للعملاء)`);
+    return json(200, { ok: true, added, total: added.context + added.notes + added.faq + added.goal });
   }
 
   // ===== REST للوحة العقل (مفتاح API) =====

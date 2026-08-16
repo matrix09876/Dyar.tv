@@ -200,6 +200,19 @@
       </div>
       <div id="brainA" style="font-size:13px;line-height:1.85;min-height:3em;background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px;padding:10px 12px">اسألني عن أي شيء تشغيلي أو إداري — أو استعمل الأزرار السريعة.</div>
       <div id="brainAsOf" style="font-size:10.5px;color:var(--muted);direction:ltr;text-align:left;margin-top:4px;min-height:1.2em"></div>
+
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin:12px 0 6px">📥 تفريغ للعقل — الصق أي معلومات (أو أسقط ملف نصي) وسأصنّفها وأحفظها للأبد</div>
+      <textarea id="dumpText" rows="3" placeholder="كل سطر يُحفظ: «ملاحظة: …» تصير مهمة · «للعملاء: …» تظهر ببوابة التتبع · «الهدف اليومي 40» · وما عداها معرفة شركة" style="width:100%;resize:vertical;background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px;color:var(--text);padding:8px 10px;font:inherit;font-size:12.5px"></textarea>
+      <div style="display:flex;gap:6px;margin-top:4px;align-items:center">
+        <span id="dumpStatus" style="flex:1;font-size:11px;color:var(--muted)"></span>
+        <button class="primary" id="dumpGo" style="padding:6px 14px">احفظ في العقل</button>
+      </div>
+
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin:12px 0 6px">📋 لوحة المهام — اسحب البطاقة بين الأعمدة وتُحفظ فوراً (أو قل للعقل «سجّل ملاحظة: …»)</div>
+      <div id="taskBoard" style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px"></div>
+
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin:12px 0 6px">🕸 خريطة معرفة العقل — كل ما يعرفه الآن بنظرة واحدة</div>
+      <canvas id="knowMap" style="width:100%;height:230px;background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px"></canvas>
     </div>
 
     <div class="pane" id="p-prio">
@@ -209,6 +222,10 @@
       <div id="plist"><div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div></div>
       <div style="font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:700">🤖 فريق الوكلاء — آخر عمل حقيقي لكل وكيل</div>
       <div id="agentsRoster" class="empty" style="font-size:12px">ينبض مع أول تشغيل…</div>
+      <div style="font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:700">🛰 سجل النشاط الحي — أعمال الوكلاء لحظة بلحظة</div>
+      <div id="agentFeed" class="empty" style="font-size:11.5px;max-height:200px;overflow:auto">بانتظار أول نبضة…</div>
+      <div style="font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:700">📅 أسبوع ديار — الطلبات آخر 7 أيام</div>
+      <div id="weekChart" style="display:flex;gap:4px;align-items:flex-end;height:74px"></div>
     </div>
 
     <div class="pane" id="p-feed">
@@ -707,6 +724,7 @@
   document.querySelectorAll('.tabs button').forEach(b => b.onclick = () => {
     document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
     document.querySelectorAll('.pane').forEach(p => p.classList.toggle('show', p.id === 'p-' + b.dataset.p));
+    if (b.dataset.p === 'brain') setTimeout(renderKnowMap, 30);      // الرسم يحتاج التبويب ظاهراً (عرض > 0)
   });
   ['tTrails','tAcc','tCells','tRoutes'].forEach(id => $(id).addEventListener('change', redrawLayers));
   // تحديث مسارات كل الطلبات الجارية دورياً (حتى 8 لكل دورة — لطف مع OSRM، والباقي بالدورة التالية)
@@ -844,6 +862,7 @@
       $('cDone').textContent = s.today.delivered;
       $('cGoal').textContent = s.goal ? '/' + s.goal : '';
       renderAgents(s.agents || {}); renderLinks(s.links || {});
+      renderFeed(s.feed || []); renderWeek(s.week || []);
     } catch {}
   }
   setInterval(pollSummary, 30_000);
@@ -871,6 +890,130 @@
     $('linksStrip').innerHTML = items.map(([c, n, d]) =>
       `<span class="chip" style="font-size:10.5px" title="${esc(d)}">${dot(c)}${esc(n)} · ${esc(d)}</span>`).join('');
   }
+
+  // ================= 🛰 دفعة FounderOS الثانية: سجل حي + أسبوع + تفريغ + لوحة مهام + خريطة معرفة =================
+  // 🛰 سجل النشاط الحي — تدفق تسلسلي (الأحدث أولاً) لما فعله الوكلاء فعلياً
+  function renderFeed(feed) {
+    if (!feed.length) return;
+    $('agentFeed').className = '';
+    $('agentFeed').innerHTML = feed.map(e => `
+      <div style="display:flex;gap:6px;align-items:baseline;padding:3px 0;border-bottom:1px dashed var(--line)">
+        <b style="font-size:11px;white-space:nowrap">${esc(e.agent.split(' — ')[0])}</b>
+        <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted)" title="${esc(e.note)}">${esc(e.note || '—')}</span>
+        <span class="num" style="color:var(--muted);font-size:10px;white-space:nowrap">${age(e.at)}</span>
+      </div>`).join('');
+  }
+  // 📅 أسبوع ديار — أعمدة الطلبات لآخر 7 أيام (أُنشئ مقابل أُنجز)
+  function renderWeek(week) {
+    if (!week.length) return;
+    const mx = Math.max(1, ...week.map(w => w.created));
+    const dayAr = (d) => ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت'][new Date(d + 'T12:00:00').getDay()] || d;
+    $('weekChart').innerHTML = week.map((w, i) => `
+      <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:2px;height:100%" title="${esc(w.d)}: ${w.created} طلبية، أُنجز ${w.delivered}">
+        <span class="num" style="font-size:10px;color:var(--muted)">${w.created || ''}</span>
+        <div style="flex:1;width:100%;display:flex;align-items:flex-end;gap:2px">
+          <div style="flex:1;background:var(--line);border-radius:3px 3px 0 0;height:${Math.max(3, w.created / mx * 100)}%"></div>
+          <div style="flex:1;background:var(--online,#3fbf77);border-radius:3px 3px 0 0;height:${Math.max(3, w.delivered / mx * 100)}%"></div>
+        </div>
+        <span style="font-size:9.5px;color:${i === 6 ? 'var(--text)' : 'var(--muted)'}">${i === 6 ? 'اليوم' : dayAr(w.d)}</span>
+      </div>`).join('');
+  }
+  // 📥 تفريغ للعقل — نص حر أو ملف نصي مسحوب؛ كل سطر يُصنَّف ويُحفظ في ذاكرة العقل الدائمة
+  $('dumpGo').onclick = async () => {
+    const text = $('dumpText').value.trim();
+    if (!text) return;
+    $('dumpStatus').textContent = '… أصنّف وأحفظ';
+    try {
+      const r = await fetch('/api/brain/dump', { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ pin, text, by: localStorage.getItem('ops_name') || 'اللوحة' }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.status);
+      $('dumpStatus').textContent = `✓ حُفظ ${j.total}: ${j.added.notes} مهمة · ${j.added.context} معرفة · ${j.added.faq} للعملاء${j.added.goal ? ' · هدف محدّث' : ''}`;
+      $('dumpText').value = '';
+      loadMemory();
+    } catch (e) { $('dumpStatus').textContent = '✗ ' + e.message; }
+  };
+  $('dumpText').addEventListener('dragover', e => e.preventDefault());
+  $('dumpText').addEventListener('drop', e => {
+    e.preventDefault();
+    for (const f of e.dataTransfer.files) {
+      if (f.size > 500_000 || !/\.(txt|md|csv|json|log)$/i.test(f.name) && !f.type.startsWith('text/')) continue;
+      const rd = new FileReader();
+      rd.onload = () => { $('dumpText').value = ($('dumpText').value + '\n' + rd.result).trim().slice(0, 20000); };
+      rd.readAsText(f);
+    }
+  });
+  // 📋 لوحة المهام — الملاحظات كبطاقات قابلة للسحب بين جديدة/جارية/منجزة (تُحفظ فوراً وتنجو من إعادة التشغيل)
+  let memCache = null, dragNote = null;
+  const COLS = [['open', '🔴 جديدة', 'var(--alert,#e25555)'], ['doing', '🟠 جارية', 'var(--busy,#e2a43c)'], ['done', '🟢 منجزة', 'var(--online,#3fbf77)']];
+  function renderBoard() {
+    const notes = (memCache?.notes || []).map(x => ({ ...x, st: x.st || 'open' }));
+    $('taskBoard').innerHTML = COLS.map(([st, label, color]) => {
+      const col = notes.filter(x => x.st === st);
+      return `<div class="tcol" data-st="${st}" style="min-height:120px;background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px;padding:6px">
+        <div style="font-size:11px;font-weight:700;color:${color};margin-bottom:5px">${label} <span class="num" style="color:var(--muted)">${col.length}</span></div>
+        ${col.map(x => `<div class="tcard num" draggable="true" data-n="${x.n}" style="background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 8px;margin-bottom:4px;font-size:11.5px;cursor:grab;${st === 'done' ? 'opacity:.55;text-decoration:line-through' : ''}">
+          ${esc(x.text)}${x.by ? `<div style="font-size:9.5px;color:var(--muted);margin-top:2px">👤 ${esc(x.by)}</div>` : ''}</div>`).join('')
+          || '<div style="font-size:10px;color:var(--muted);text-align:center;padding:14px 0;border:1px dashed var(--line);border-radius:8px">أسقط هنا</div>'}
+      </div>`;
+    }).join('');
+    document.querySelectorAll('.tcard').forEach(c => c.addEventListener('dragstart', () => { dragNote = +c.dataset.n; }));
+    document.querySelectorAll('.tcol').forEach(col => {
+      col.addEventListener('dragover', e => { e.preventDefault(); col.style.borderColor = 'var(--sky,#4da3ff)'; });
+      col.addEventListener('dragleave', () => { col.style.borderColor = 'var(--line)'; });
+      col.addEventListener('drop', async e => {
+        e.preventDefault(); col.style.borderColor = 'var(--line)';
+        if (dragNote == null) return;
+        const st = col.dataset.st, note = memCache?.notes?.find(x => x.n === dragNote);
+        if (note && (note.st || 'open') !== st) {
+          note.st = st; renderBoard();                                   // تفاؤلي — والخادم يوفّق
+          fetch('/api/brain/note-status', { method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ pin, n: dragNote, st }) }).catch(() => {});
+        }
+        dragNote = null;
+      });
+    });
+  }
+  // 🕸 خريطة معرفة العقل — رسم شعاعي: العقل بالمركز وحوله الفريق والمتاجر والذاكرة
+  function renderKnowMap() {
+    const cv = $('knowMap'), m = memCache;
+    if (!cv || !m) return;
+    const dpr = devicePixelRatio || 1, W = cv.clientWidth, H = cv.clientHeight || 230;
+    cv.width = W * dpr; cv.height = H * dpr;
+    const g = cv.getContext('2d'); g.scale(dpr, dpr); g.clearRect(0, 0, W, H);
+    const cx = W / 2, cy = H / 2;
+    const groups = [
+      ...(m.team || []).slice(0, 8).map(x => ({ icon: '👤', label: x.name, sub: x.role })),
+      ...(m.stores || []).slice(0, 6).map(x => ({ icon: '🏪', label: x.name })),
+      { icon: '🗒', label: `${(m.notes || []).length} ملاحظة` },
+      { icon: '📌', label: `${(m.context || []).length} معرفة` },
+      { icon: '💬', label: `${(m.faq || []).length} للعملاء` },
+      ...(m.goals?.dailyOrders ? [{ icon: '🎯', label: `هدف ${m.goals.dailyOrders}` }] : []),
+    ];
+    const R = Math.min(cx, cy) - 34;
+    g.font = '10px sans-serif'; g.textAlign = 'center';
+    groups.forEach((n, i) => {
+      const a = (i / groups.length) * Math.PI * 2 - Math.PI / 2;
+      const x = cx + Math.cos(a) * R, y = cy + Math.sin(a) * R * 0.82;
+      g.strokeStyle = 'rgba(120,140,180,.22)'; g.beginPath(); g.moveTo(cx, cy); g.lineTo(x, y); g.stroke();
+      g.font = '13px sans-serif'; g.fillText(n.icon, x, y - 4);
+      g.font = '9.5px sans-serif'; g.fillStyle = '#c7cede';
+      g.fillText(String(n.label).slice(0, 14), x, y + 9);
+      if (n.sub) { g.fillStyle = '#98a1b4'; g.fillText(String(n.sub).slice(0, 16), x, y + 19); }
+      g.fillStyle = '#c7cede';
+    });
+    g.font = '22px sans-serif'; g.fillText('🧠', cx, cy + 2);
+    g.font = 'bold 10px sans-serif'; g.fillStyle = '#e9ebf1'; g.fillText('عقل ديار', cx, cy + 18);
+  }
+  async function loadMemory() {
+    try {
+      const r = await fetch('/api/brain/memory', { headers: { 'x-kiosk-pin': pin } });
+      if (!r.ok) return;
+      memCache = await r.json();
+      renderBoard(); renderKnowMap();
+    } catch {}
+  }
+  setInterval(loadMemory, 45_000);
 
   // ================= 📳 تنبيهات الهاتف (وضع المشغّل الواحد): العاجل يصلك أينما كنت =================
   const urlB64ToU8 = (s) => { const b = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
@@ -999,7 +1142,7 @@
   function askPin(msg) { if (msg) $('pinInput').placeholder = msg; pinDlg.showModal(); }
   const normDigits = s => String(s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d)).trim();
   $('pinGo').onclick = () => { pin = normDigits($('pinInput').value); if (!pin) return;
-    sessionStorage.pin = pin; pinDlg.close(); connect(); pollSummary(); };
+    sessionStorage.pin = pin; pinDlg.close(); connect(); pollSummary(); loadMemory(); };
   $('addBtn').onclick = () => {
     const url = location.origin + '/driver.html';
     $('drvLink').textContent = url;
@@ -1012,7 +1155,7 @@
     .then(c => { $('brainLink').href = c.brainPanelUrl; if (c.hexKm) HEXKM = c.hexKm; })
     .catch(() => { $('brainLink').style.display = 'none'; });
 
-  if (pin) { connect(); pollSummary(); } else askPin();
+  if (pin) { connect(); pollSummary(); loadMemory(); } else askPin();
 </script>
 </body>
 </html>
