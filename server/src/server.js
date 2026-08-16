@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'founderos-2';        // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
+const BUILD_TAG = 'ops-room-hardened-3'; // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -67,6 +67,11 @@ process.on('unhandledRejection', (e) => console.error('[unhandledRejection]', e?
 
 const drivers = new Map();
 const opsClients = new Set();
+// 👥 حضور غرفة العمليات المشتركة: من متصل الآن بالاسم (تبويبات مكررة بنفس الاسم = حضور واحد)
+const roomList = () => { const seen = new Map();
+  for (const w of opsClients) if (w.readyState === w.OPEN && w.roomName && !seen.has(w.roomName))
+    seen.set(w.roomName, { name: w.roomName, at: w.roomAt });
+  return [...seen.values()]; };
 const driverClients = new Map();          // ws -> driverId
 const driverToWs = new Map();             // driverId -> ws   (فهرس عكسي O(1) بدل مسح خطي)
 const onlineIds = new Set();              // معرّفات المتصلين — عدّ O(1)
@@ -898,6 +903,7 @@ function brainSummary() {
     cells: cellDrivers.size, topCells: liveIndex().slice(0, 5),      // الفهرس الجغرافي الحي
     goal: brainMemory.goals.dailyOrders || 0, notesOpen: brainMemory.notes.length,
     agents: agentPulse, links: linksPublic(),                        // شفافية الوكلاء والوصلات
+    room: roomList(),                                                // 👥 من في غرفة العمليات الآن
     feed: agentFeed.slice(-30).reverse(),                            // سجل النشاط الحي — الأحدث أولاً
     week: Array.from({ length: 7 }, (_, i) => ({ d: dateKey(6 - i), ...statsFor(6 - i) })),  // آخر 7 أيام
     wx: wx.at ? { t: wx.t, tmax: wx.tmax, rain: wx.rain, wind: wx.wind } : null,
@@ -1185,6 +1191,11 @@ function brainAnswer(q, s, staff) {
   if (has('برنامج', 'اولوي', 'خطه', 'ماذا نفعل', 'شو نعمل'))
     return `برنامج اليوم ${fmtDayAr(0)}: ` + brainPriorities(s).join(' ثم ') +
       ` والهدف: إنجاز أعلى من أمس (${y.delivered} مُنجز).`;
+  if (has('مين في الغرفه', 'من في الغرفه', 'مين بالغرفه', 'الحضور')) {
+    const r = roomList();
+    return r.length ? `في غرفة العمليات الآن ${r.length}: ${r.map(x => x.name).join('، ')}. و${s.online} موصل متصل بالميدان.`
+      : 'لا أحد في غرفة العمليات الآن سواي — أنا حاضر دائماً، والعاجل أصعّده للهاتف مباشرة.';
+  }
   if (has('متصل', 'موصلين', 'سائق', 'فريق', 'مين موجود'))
     return s.online ? `${s.online} موصل متصل الآن${s.onlineNames.length ? ': ' + s.onlineNames.join('، ') : ''}. المسجّلون كلهم ${s.devices} جهازاً.`
       : 'لا يوجد موصل متصل الآن — الأجهزة كلها خارج الخدمة.';
@@ -1252,12 +1263,20 @@ const ttsCache = new Map();               // نص -> صوت تاليا mp3 — �
 
 // ---------- 🌐 عتاد بوابة العملاء: محدّد معدل + بحث بالمرجع + حمولة آمنة ----------
 const RL = new Map();                     // ip -> {n, resetAt} — حماية النقاط العلنية من الإغراق
+let rlGlobal = { n: 0, resetAt: 0 };      // سقف كلي مستقل عن الـ IP — يمنع تجاوز الحد بتدوير x-forwarded-for
+function clientIp(req) {
+  // خلف بروكسي واحد (Render): آخر مدخل في x-forwarded-for يضيفه البروكسي الموثوق — لا يمكن للعميل تزويره
+  const xff = String(req.headers['x-forwarded-for'] || '').split(',').map(s => s.trim()).filter(Boolean);
+  return (xff.length ? xff[xff.length - 1] : req.socket?.remoteAddress) || '?';
+}
 function rateOk(req, limit) {
-  const ip = String(req.headers['x-forwarded-for'] || req.socket?.remoteAddress || '?').split(',')[0].trim();
   const now = Date.now();
+  if (now > rlGlobal.resetAt) rlGlobal = { n: 0, resetAt: now + 60_000 };
+  if (++rlGlobal.n > limit * 40) return false;             // سقف كلي: حتى لو دوّر العنوان، لا يتجاوز إجمالي البوابة
+  const ip = clientIp(req);
   let e = RL.get(ip);
   if (!e || now > e.resetAt) { e = { n: 0, resetAt: now + 60_000 }; RL.set(ip, e); }
-  if (RL.size > 5000) RL.clear();
+  if (RL.size > 5000) for (const [k, v] of RL) if (now > v.resetAt) RL.delete(k);   // كنس المنتهي فقط لا مسح الكل
   return ++e.n <= limit;
 }
 const STAGE_AR = { new: 'استلمنا طلبك، وتاليا تبحث عن أقرب موصل', assigned: 'موصلك بالطريق لاستلام طلبك من المتجر',
@@ -1287,11 +1306,11 @@ async function handleHttp(req, res) {
   if (req.method === 'OPTIONS') return json(204, {});
   if (url.pathname === '/api/health')
     return json(200, { ok: true, v: BUILD_TAG, upMin: Math.round(process.uptime() / 60), drivers: drivers.size, online: onlineCount(),
-      // تشخيص الرموز بلا كشف قيمها: أي متغير بيئة هو الفعّال للوحة/الأجهزة
+      // تشخيص الرموز بلا كشف قيمها إطلاقاً: منطقيّات فقط، ولا نطبع القيمة الافتراضية للعلن
       pins: { opsPinSet: Boolean(process.env.OPS_PIN), driverPinSet: Boolean(process.env.DYAR_PIN),
-              panelUses: process.env.OPS_PIN ? 'OPS_PIN' : process.env.DYAR_PIN ? 'DYAR_PIN' : 'الافتراضي 1234' } });
-  if (url.pathname === '/api/config')
-    return json(200, { brainPanelUrl: BRAIN_PANEL_URL, hexKm: HEX_KM });
+              usingDefault: !process.env.OPS_PIN && !process.env.DYAR_PIN } });
+  if (url.pathname === '/api/config')                          // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
+    return json(200, { hexKm: HEX_KM });
 
   // ===== 🌐 بوابة العملاء العامة (نمط Jarvis Helpdesk): تتبع فوري + إجابات بلا مكالمة =====
   // علنية بلا رمز — رقم الطلب بيد صاحبه، والمكشوف حدّه الأدنى الآمن (لا عناوين ولا هواتف)
@@ -1553,6 +1572,12 @@ function handleShared(m, from, role, ws) {
 // ---------- WebSocket ----------
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 4 * 1024 * 1024 });
 
+// 🛡️ ميزانية رسائل لكل مقبس: يمنع إغراق الغرفة بالبث (voice/text/gps) من مقبس واحد
+function msgOk(ws) {
+  const now = Date.now();
+  if (now > (ws._rlAt || 0)) { ws._rlAt = now + 1000; ws._rlN = 0; }
+  return ++ws._rlN <= 40;                  // حتى 40 رسالة/ثانية لكل مقبس — أكثر من كافٍ لـ GPS الطبيعي
+}
 wss.on('connection', (ws) => {
   ws.isAlive = true;
   ws.on('pong', () => { ws.isAlive = true; });
@@ -1565,10 +1590,15 @@ wss.on('connection', (ws) => {
 
     // ===== لوحة التحكم =====
     if (hello.role === 'ops') {
+      ws.roomName = String(hello.name || 'العمليات').slice(0, 40);   // 👥 حضور الغرفة المشتركة بالاسم
+      ws.roomAt = Date.now();
       opsClients.add(ws);
       send(ws, { t: 'snapshot', drivers: [...drivers.values()].map(publicInfo), orders: activeOrdersList(),
-        closed: closedOrders.slice(-30), stores: [...stores.values()], priorities: openPriorities(), staff: STAFF });
+        closed: closedOrders.slice(-30), stores: [...stores.values()], priorities: openPriorities(), staff: STAFF,
+        room: roomList() });
+      broadcastOps({ t: 'room', room: roomList() });
       ws.on('message', (raw2) => {
+        if (!msgOk(ws)) return;
         let m; try { m = JSON.parse(raw2); } catch { return; }
         if (handleShared(m, hello.name || 'العمليات', 'ops', ws)) return;
         // إجراء على أولوية من اللوحة/الشاشة: هوية → انتقال مشروع → بث → توثيق
@@ -1669,13 +1699,15 @@ wss.on('connection', (ws) => {
         }
         if (m.t === 'order_redispatch' && o && o.status === 'new' && !o._offer) { startDispatch(o); return; }
       });
-      ws.on('close', () => opsClients.delete(ws));
+      ws.on('close', () => { opsClients.delete(ws); broadcastOps({ t: 'room', room: roomList() }); });
       return;
     }
 
     // ===== جهاز موصل =====
     if (hello.role === 'driver' && hello.deviceId && hello.name) {
-      const id = String(hello.deviceId).slice(0, 64);
+      // 🛡️ معرّف الجهاز حروف/أرقام/شرطات فقط — يمنع حقن HTML عبر معرّف خبيث (دفاع طبقة أولى)
+      const id = String(hello.deviceId).replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+      if (!id) return ws.close(4000, 'bad deviceId');
       // إعادة اتصال: افصل المقبس القديم لنفس الجهاز بلا قلب الحالة إلى «غير متصل»
       const oldWs = driverToWs.get(id);
       if (oldWs && oldWs !== ws) { oldWs._superseded = true; driverClients.delete(oldWs); try { oldWs.close(4004, 'superseded'); } catch {} }
@@ -1698,6 +1730,7 @@ wss.on('connection', (ws) => {
       console.log(`[+] ${d.name} (${d.device}) متصل — الأجهزة: ${drivers.size}`);
 
       ws.on('message', (raw2) => {
+        if (!msgOk(ws)) return;
         let m; try { m = JSON.parse(raw2); } catch { return; }
         if (handleShared(m, d.name, 'driver', ws)) return;
 
@@ -1785,8 +1818,10 @@ server.listen(PORT, () => {
   for (const ip of lans) console.log(`  من الشبكة:    ${proto}://${ip}:${PORT}/`);
   console.log(`  صفحة السائق:  ${proto}://<العنوان>:${PORT}/driver.html`);
   console.log(`  شاشة المكتب:  ${proto}://<العنوان>:${PORT}/kiosk.html  (عقل ديار التنفيذي — ${process.env.ANTHROPIC_API_KEY ? 'استدلال Claude ⚡' : 'استدلال محلي'})`);
-  console.log(`  رمز الأجهزة PIN: ${PIN}${OPS_PIN === PIN ? '  (⚠ اضبط OPS_PIN منفصلاً للوحة في الإنتاج)' : '  · رمز اللوحة OPS_PIN: مضبوط ✓'}`);
-  console.log(`  لوحة العقل:    ${BRAIN_PANEL_URL}`);
+  // 🛡️ لا نطبع قيمة أي رمز في السجلّات — حالة فقط
+  const usingDefaultPin = !process.env.DYAR_PIN && !process.env.OPS_PIN;
+  console.log(`  رمز الأجهزة: ${process.env.DYAR_PIN ? 'مضبوط ✓' : 'افتراضي ⚠ اضبط DYAR_PIN'} · رمز اللوحة: ${process.env.OPS_PIN ? 'مضبوط ✓' : 'يتبع رمز الأجهزة ⚠ اضبط OPS_PIN منفصلاً'}`);
+  if (usingDefaultPin) console.log('  ⚠⚠ يعمل برمز افتراضي — اضبط DYAR_PIN وOPS_PIN في الإنتاج فوراً');
   console.log(`  REST للعقل:    GET /api/v1/drivers · POST /api/v1/announce  (x-api-key)`);
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');

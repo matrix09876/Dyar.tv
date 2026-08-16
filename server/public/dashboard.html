@@ -145,8 +145,8 @@
     <button id="talkBtn" title="اضغط مطولًا للتحدث لكل الأجهزة">🎙 تحدث</button>
     <button id="addBtn">➕ جهاز</button>
     <button id="addStoreBtn" title="انقر ثم حدد موقع المتجر على الخريطة">🏪 متجر</button>
-    <a id="brainLink" target="_blank" rel="noopener"
-       style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">🧠 العقل</a>
+    <a id="brainLink" href="/kiosk.html" target="_blank" rel="noopener"
+       style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">🧠 شاشة العقل</a>
     <a href="/kiosk.html" target="_blank" rel="noopener"
        style="display:inline-flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:9px;padding:6px 10px;text-decoration:none;color:var(--text)">📺 الشاشة</a>
   </div>
@@ -217,7 +217,8 @@
 
     <div class="pane" id="p-prio">
       <div style="font-size:12px;color:var(--muted);font-weight:700;margin-bottom:6px">⚡ غرفة العمليات — الأولويات الحية والوكلاء والوصلات</div>
-      <input id="opsName" placeholder="اسمك (يُسجَّل عند استلام الأولويات)" style="width:100%;margin-bottom:6px">
+      <input id="opsName" placeholder="اسمك (يظهر في الغرفة المشتركة ويُسجَّل عند الاستلام)" style="width:100%;margin-bottom:6px">
+      <div id="roomBar" style="display:flex;gap:5px;flex-wrap:wrap;align-items:center;margin-bottom:6px;font-size:11px;color:var(--muted)"></div>
       <div id="linksStrip" style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px"></div>
       <div id="plist"><div class="empty">لا أولويات مفتوحة 🟢<br>عقل ديار يراقب: طوارئ، طلبات عالقة، موصلين منقطعين، تصعيدات — وكل واحدة تُدار حتى الإغلاق الموثّق.</div></div>
       <div style="font-size:12px;color:var(--muted);margin:10px 0 4px;font-weight:700">🤖 فريق الوكلاء — آخر عمل حقيقي لكل وكيل</div>
@@ -560,7 +561,7 @@
     $('dlist').innerHTML = arr.map(d => {
       const acc = d.last?.acc, accCls = acc == null ? '' : acc <= 8 ? 'acc-good' : acc <= 25 ? 'acc-mid' : 'acc-bad';
       const o = activeOrderOf(d.id);
-      return `<button class="drv ${selected===d.id?'sel':''}" data-id="${d.id}">
+      return `<button class="drv ${selected===d.id?'sel':''}" data-id="${esc(d.id)}">
         <span class="row1"><span class="dot" style="background:var(--${d.sos?'alert':!d.online?'offline':o?'busy':'online'})"></span>
           ${esc(d.name)}${d.sos ? ' 🚨' : ''}
           ${o ? `<span class="badge num">${esc(o.id)}</span>` : ''}</span>
@@ -572,8 +573,8 @@
           ${d.last ? `<span>${age(d.last.ts)}</span>` : '<span>لا إحداثيات</span>'}
         </span>
         ${selected===d.id ? `<span class="meta" style="gap:6px; margin-top:4px">
-          <button class="badge" data-act="rename" data-id="${d.id}">✏️ تسمية</button>
-          ${d.online ? `<button class="badge" data-act="kick" data-id="${d.id}">⛔ فصل</button>` : `<button class="badge" data-act="remove" data-id="${d.id}">🗑 حذف</button>`}
+          <button class="badge" data-act="rename" data-id="${esc(d.id)}">✏️ تسمية</button>
+          ${d.online ? `<button class="badge" data-act="kick" data-id="${esc(d.id)}">⛔ فصل</button>` : `<button class="badge" data-act="remove" data-id="${esc(d.id)}">🗑 حذف</button>`}
         </span>` : ''}
       </button>`;
     }).join('');
@@ -657,12 +658,12 @@
           ${o.status === 'new' || !o.driverId ? `
             <select data-assign="${o.id}">
               <option value="">أسنِد إلى…</option>
-              ${cands.map((c,i) => `<option value="${c.d.id}">${esc(c.d.name)} — ${c.km.toFixed(1)} كم${i===0?' ⭐ الأقرب':''}</option>`).join('')}
+              ${cands.map((c,i) => `<option value="${esc(c.d.id)}">${esc(c.d.name)} — ${c.km.toFixed(1)} كم${i===0?' ⭐ الأقرب':''}</option>`).join('')}
             </select>
             ${!o.offeredTo ? `<button data-redispatch="${o.id}">🧕 اعرضيه يا تاليا</button>` : ''}` : `
             <button data-track="${o.id}">🗺 المسار</button>
             <select data-assign="${o.id}"><option value="">نقل إلى…</option>
-              ${cands.filter(c => c.d.id !== o.driverId).map(c => `<option value="${c.d.id}">${esc(c.d.name)} — ${c.km.toFixed(1)} كم</option>`).join('')}
+              ${cands.filter(c => c.d.id !== o.driverId).map(c => `<option value="${esc(c.d.id)}">${esc(c.d.name)} — ${c.km.toFixed(1)} كم</option>`).join('')}
             </select>`}
           <button data-cancel="${o.id}">إلغاء</button>
         </div>` : ''}
@@ -741,7 +742,7 @@
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     ws = new WebSocket(proto + '://' + location.host + '/ws');
-    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', role: 'ops', pin }));
+    ws.onopen = () => ws.send(JSON.stringify({ t: 'hello', role: 'ops', pin, name: myName() }));
     ws.onmessage = e => {
       const m = JSON.parse(e.data);
       if (m.t === 'snapshot') {
@@ -750,7 +751,9 @@
         (m.closed || []).forEach(o => closedM.set(o.id, o));
         (m.stores || []).forEach(s => upsertStore(s));
         prsM.clear(); (m.priorities || []).forEach(p => prsM.set(p.id, p)); renderPrio();
+        if (m.room) renderRoom(m.room);
       }
+      else if (m.t === 'room') renderRoom(m.room);
       else if (m.t === 'store') upsertStore(m.s);
       else if (m.t === 'store_removed') { const r = storesM.get(m.id); r?.marker?.remove(); storesM.delete(m.id); renderStores(); }
       else if (m.t === 'priority') {
@@ -802,8 +805,16 @@
   const prsM = new Map();
   const PR_OPEN_ST = new Set(['detected','notified','acknowledged','in_progress','escalated']);
   $('opsName').value = localStorage.getItem('ops_name') || '';
-  $('opsName').addEventListener('change', () => localStorage.setItem('ops_name', $('opsName').value.trim()));
+  $('opsName').addEventListener('change', () => { localStorage.setItem('ops_name', $('opsName').value.trim());
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify({ t: 'hello', role: 'ops', pin, name: myName() })); });  // حدّث حضوري بالاسم الجديد
   const myName = () => $('opsName').value.trim() || 'العمليات';
+  // 👥 الغرفة المشتركة: من متصل الآن بغرفة العمليات — حضور حي بالاسم
+  function renderRoom(room) {
+    if (!Array.isArray(room)) return;
+    $('roomBar').innerHTML = '<b style="color:var(--text)">👥 في الغرفة:</b> ' + (room.length
+      ? room.map(x => `<span class="chip" style="font-size:10.5px;background:var(--surface2)"><span class="dot" style="background:var(--online)"></span>${esc(x.name)}</span>`).join('')
+      : '<span style="opacity:.7">أنت فقط</span>');
+  }
   function prioAge(ms) { const m = Math.floor(ms / 60000); return m < 1 ? 'الآن' : m < 60 ? 'منذ ' + m + ' د' : 'منذ ' + Math.floor(m/60) + ' س ' + (m%60) + ' د'; }
   function renderPrio() {
     const list = [...prsM.values()].sort((a, b) => b.score - a.score || a.createdAt - b.createdAt);
@@ -1152,8 +1163,8 @@
     addDlg.showModal();
   };
   fetch('/api/config').then(r => r.json())
-    .then(c => { $('brainLink').href = c.brainPanelUrl; if (c.hexKm) HEXKM = c.hexKm; })
-    .catch(() => { $('brainLink').style.display = 'none'; });
+    .then(c => { if (c.hexKm) HEXKM = c.hexKm; })
+    .catch(() => {});
 
   if (pin) { connect(); pollSummary(); loadMemory(); } else askPin();
 </script>
