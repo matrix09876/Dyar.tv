@@ -12,7 +12,7 @@ import { createServer as createHttp } from 'node:http';
 import { createServer as createHttps } from 'node:https';
 import { readFileSync, existsSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
-import { extname, join, normalize } from 'node:path';
+import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 
@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'agents-brain-5';      // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
+const BUILD_TAG = 'sec-review-6';        // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -1402,14 +1402,17 @@ function rateOk(req, limit) {
 // يُرجع 0 (سليم) · 401 (رمز خاطئ) · 429 (تجاوز الحد). الافتراضي 20/دقيقة يكبح التخمين (10000 رمز ≈ 8 ساعات) دون إزعاج البشر.
 const PIN_MAX_PER_MIN = Number(process.env.PIN_MAX_PER_MIN || 20);
 const pinAttempts = new Map();           // ip -> {n, resetAt} — محاولات فاشلة بالنافذة الحالية
+let pinGlobal = { n: 0, t: 0 };          // 🛡️ سقف كلّيّ للمحاولات الفاشلة — يُبطل تدوير x-forwarded-for على النشر غير المُوكَّل
 function pinGate(req, raw, expected) {
   const ip = clientIp(req), now = Date.now();
+  if (now - pinGlobal.t > 60_000) pinGlobal = { n: 0, t: now };
+  if (pinGlobal.n >= PIN_MAX_PER_MIN * 30) return 429;          // إجمالي فشل كلّيّ (كل الـIPs) — يمنع الغمر بعناوين مزوّرة
   let e = pinAttempts.get(ip);
   if (!e || now > e.resetAt) { e = { n: 0, resetAt: now + 60_000 }; pinAttempts.set(ip, e); }
   if (pinAttempts.size > 5000) for (const [k, v] of pinAttempts) if (now > v.resetAt) pinAttempts.delete(k);
-  if (e.n >= PIN_MAX_PER_MIN) return 429;                        // تجاوز محاولات الرمز الفاشلة بالدقيقة
+  if (e.n >= PIN_MAX_PER_MIN) return 429;                        // تجاوز محاولات الرمز الفاشلة بالدقيقة لهذا الـIP
   if (pinOk(raw, expected)) { pinAttempts.delete(ip); return 0; }  // نجاح ⟵ صفّر العدّاد (المشغّل الشرعي لا يُقفل)
-  e.n++;
+  e.n++; pinGlobal.n++;
   return 401;
 }
 const pinErr = (code) => ({ error: code === 429 ? 'محاولات كثيرة — انتظر دقيقة ثم أعد المحاولة' : 'bad pin' });
@@ -1442,9 +1445,12 @@ async function handleHttp(req, res) {
   if (req.method === 'OPTIONS') return json(204, {});
   if (url.pathname === '/api/health' && req.method === 'GET')
     return json(200, { ok: true, v: BUILD_TAG, upMin: Math.round(process.uptime() / 60), drivers: drivers.size, online: onlineCount(),
-      // تشخيص الرموز بلا كشف قيمها إطلاقاً: منطقيّات فقط، ولا نطبع القيمة الافتراضية للعلن
+      // تشخيص الأمن بلا كشف أي قيمة — منطقيّات فقط تكشف الإعدادات الناقصة الخطرة
       pins: { opsPinSet: Boolean(process.env.OPS_PIN), driverPinSet: Boolean(process.env.DYAR_PIN),
-              usingDefault: !process.env.OPS_PIN && !process.env.DYAR_PIN } });
+              opsPinDistinct: Boolean(process.env.OPS_PIN) && process.env.OPS_PIN !== PIN,   // رمز اللوحة منفصل عن رمز الأجهزة؟
+              usingDefault: !process.env.OPS_PIN && !process.env.DYAR_PIN },
+      brainKeySet: Boolean(process.env.BRAIN_API_KEY), brainKeyDefault: !process.env.BRAIN_API_KEY,   // مفتاح REST افتراضيّ؟ (يحرس مواقع الأسطول)
+      claudeSet: Boolean(process.env.ANTHROPIC_API_KEY) });
   if (url.pathname === '/api/config' && req.method === 'GET')   // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
     return json(200, { hexKm: HEX_KM });
 
@@ -1708,7 +1714,7 @@ async function handleHttp(req, res) {
   let file = url.pathname === '/' ? '/dashboard.html' : url.pathname;
   file = normalize(file).replace(/^(\.\.[/\\])+/, '');
   const full = join(PUB, file);
-  if (!full.startsWith(PUB) || !existsSync(full)) { res.writeHead(404); return res.end('not found'); }
+  if ((full !== PUB && !full.startsWith(PUB + sep)) || !existsSync(full)) { res.writeHead(404); return res.end('not found'); }   // 🛡️ فاصل مسار — لا مجلّد شقيق ببادئة PUB
   res.writeHead(200, { 'content-type': MIME[extname(full)] || 'application/octet-stream' });
   res.end(readFileSync(full));
 }
@@ -1720,9 +1726,16 @@ const server = useTls
   : createHttp(handleHttp);
 
 // ---------- رسائل مشتركة (صوت/نص/طوارئ) ----------
+// 🛡️ ميزانية خاصّة للصوت الثقيل (≤700KB يُضخَّم للجميع): 3 مقاطع/ثانية لكل مقبس — أضيق كثيراً من GPS
+function voiceOk(ws) {
+  const now = Date.now();
+  if (now > (ws._vAt || 0)) { ws._vAt = now + 1000; ws._vN = 0; }
+  return ++ws._vN <= 3;
+}
 function handleShared(m, from, role, ws) {
   // بث صوتي PTT: يُرحَّل لكل الأطراف (لا أرشيف ثقيل في الذاكرة — الضغط الخلفي في send يحمي البطيئين)
   if (m.t === 'voice' && typeof m.data === 'string' && m.data.length < 700_000) {   // ~بث قصير معقول
+    if (!voiceOk(ws)) return true;                                                   // كبح إغراق الصوت — يُسقط بلا بث
     broadcastAll({ t: 'voice', from, role, ts: Date.now(), mime: String(m.mime || 'audio/webm'), data: m.data, dur: +m.dur || null }, ws);
     return true;
   }
@@ -2004,6 +2017,9 @@ function onListen() {
   const usingDefaultPin = !process.env.DYAR_PIN && !process.env.OPS_PIN;
   console.log(`  رمز الأجهزة: ${process.env.DYAR_PIN ? 'مضبوط ✓' : 'افتراضي ⚠ اضبط DYAR_PIN'} · رمز اللوحة: ${process.env.OPS_PIN ? 'مضبوط ✓' : 'يتبع رمز الأجهزة ⚠ اضبط OPS_PIN منفصلاً'}`);
   if (usingDefaultPin) console.log('  ⚠⚠ يعمل برمز افتراضي — اضبط DYAR_PIN وOPS_PIN في الإنتاج فوراً');
+  // 🔴 خطر تصعيد: رمز اللوحة = رمز الأجهزة ⟵ حامل رمز السائق يدخل غرفة العمليات. اضبط OPS_PIN منفصلاً.
+  if (OPS_PIN === PIN) console.log('  🔴🔴 خطر: رمز اللوحة يساوي رمز الأجهزة — أي سائق يقدر يدخل غرفة العمليات! اضبط OPS_PIN مختلفاً فوراً');
+  if (!process.env.BRAIN_API_KEY) console.log('  🔴🔴 خطر: مفتاح REST افتراضيّ (dyar-brain-key) — يحرس مواقع الأسطول الحيّة وحقن الطلبات! اضبط BRAIN_API_KEY فوراً');
   console.log(`  REST للعقل:    GET /api/v1/drivers · POST /api/v1/announce  (x-api-key)`);
   if (!useTls) console.log('  تنبيه: GPS والمايك من الأجهزة يتطلبان HTTPS — docs/quickstart.md');
   console.log('──────────────────────────────────────────────');
