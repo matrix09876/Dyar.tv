@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'sara-conversational-7';   // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
+const BUILD_TAG = 'sara-haiku-fix-8';         // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -281,7 +281,9 @@ async function askAgent(personaKey, q, opts = {}) {
   const messages = [...history, { role: 'user', content: parts.join('\n') }];
   // العميل: نموذج سريع اقتصادي (نقطة عامّة) — الداخلي: النموذج التنفيذيّ الأقوى
   const model = opts.model || (opts.forCustomer ? (process.env.CUST_MODEL || 'claude-haiku-4-5') : (process.env.BRAIN_MODEL || 'claude-opus-5'));
-  const body = { model, max_tokens: opts.maxTokens || 700, thinking: { type: 'adaptive' }, system, messages };
+  const body = { model, max_tokens: opts.maxTokens || 700, system, messages };
+  // «التفكير المتكيّف» مدعوم على 4.6+ فقط — Haiku 4.5 يرفضه (400). نُفعّله للنماذج الأقوى دون السريع
+  if (!/haiku|claude-3|claude-instant/i.test(model)) body.thinking = { type: 'adaptive' };
   const j = await claudeCall(body);
   const text = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join(' ').trim();
   if (!text) throw new Error('agent empty');
@@ -1388,8 +1390,9 @@ async function askClaude(q, s, staff) {
     (stores.size ? `🏪 متاجرنا الشريكة: ${[...stores.values()].map(x => x.name).slice(0, 15).join('، ')}\n` : '') +
     (brainMemory.notes.length ? `🗒 ملاحظات المكتب المفتوحة: ${brainMemory.notes.slice(-8).map(x => `(${x.n}) ${x.text}`).join(' | ')}\n` : '') +
     (staff ? `المتحدث: ${String(staff).slice(0, 60)}\n` : '') + `السؤال: ${q}` }];
-  const base = { model: process.env.BRAIN_MODEL || 'claude-opus-5', max_tokens: 1200,
-    thinking: { type: 'adaptive' }, system, tools: execToolDefs() };
+  const brainModel = process.env.BRAIN_MODEL || 'claude-opus-5';
+  const base = { model: brainModel, max_tokens: 1200, system, tools: execToolDefs(),
+    ...(!/haiku|claude-3|claude-instant/i.test(brainModel) ? { thinking: { type: 'adaptive' } } : {}) };
   let j = await claudeCall({ ...base, messages });
   for (let round = 0; round < 4 && j.stop_reason === 'tool_use'; round++) {   // حلقة الأدوات — 4 جولات كحد أقصى
     const uses = (j.content || []).filter(c => c.type === 'tool_use');
