@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'sara-diag-10'; // وسم البناء
+const BUILD_TAG = 'sara-ready-11'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -1493,7 +1493,9 @@ async function handleHttp(req, res) {
               usingDefault: !process.env.OPS_PIN && !process.env.DYAR_PIN },
       brainKeySet: Boolean(process.env.BRAIN_API_KEY), brainKeyDefault: !process.env.BRAIN_API_KEY,   // مفتاح REST افتراضيّ؟ (يحرس مواقع الأسطول)
       claudeSet: Boolean(process.env.ANTHROPIC_API_KEY),
-      claudeErr: lastClaudeErr ? { status: lastClaudeErr.status, type: lastClaudeErr.type, msg: lastClaudeErr.msg, model: lastClaudeErr.model, agoSec: Math.round((Date.now() - lastClaudeErr.at) / 1000) } : null });
+      claudeErr: lastClaudeErr ? { status: lastClaudeErr.status, type: lastClaudeErr.type, model: lastClaudeErr.model,
+        hint: lastClaudeErr.status === 400 && /credit|balance|billing/i.test(lastClaudeErr.msg || '') ? 'أضف رصيداً في Anthropic (Plans & Billing)' : null,
+        agoSec: Math.round((Date.now() - lastClaudeErr.at) / 1000) } : null });
   if (url.pathname === '/api/config' && req.method === 'GET')   // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
     return json(200, { hexKm: HEX_KM });
 
