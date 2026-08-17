@@ -123,7 +123,7 @@ $('#send').onclick = async () => {
   try {
     const j = await (await fetch('/api/track/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q }) })).json();
     bubble(j.answer || j.error || '…');
-    if (j.order) { $('#ref').value = j.order.ref || j.order.id; track($('#ref').value); }
+    if (j.order && j.order.ref) { $('#ref').value = j.order.ref; track(j.order.ref); }
   } catch { bubble('تعذر الاتصال — حاول ثانية.'); }
 };
 $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') $('#send').onclick(); });

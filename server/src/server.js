@@ -233,8 +233,10 @@ const DYAR_KB = {
   'للمتاجر': 'عندك متجر أو مطعم في الجليل؟ انضمّ لديار: نوصّل طلباتك لزبائنك بسرعة وبلا عمولات مجحفة، ونعرض متجرك على خريطتنا. سوزان مسؤولة تسجيل المتاجر، وعبد المبيعات والشراكات.',
   'لماذا ديار': 'نظامنا ملكنا بالكامل، توزيع آليّ ذكيّ (نمط أوبر/كريم لكن محليّ)، إدارة كل مشكلة حتى الإغلاق، وأسعار بلا عمولات وسطاء. القرب والسرعة والثقة — هذه ديار.',
 };
+// مفاتيح داخليّة لا تُرسل أبداً للعملاء (فارغة الآن — كل DYAR_KB علنيّ آمن — لكن الحاجز حقيقيّ لا وهميّ)
+const KB_INTERNAL = new Set([]);
 const kbText = (customer = false) => Object.entries(DYAR_KB)
-  .filter(([k]) => !customer || !['لماذا ديار'].includes('__internal_none__'))   // كل المعرفة علنيّة آمنة للعملاء
+  .filter(([k]) => !(customer && KB_INTERNAL.has(k)))
   .map(([k, v]) => `• ${k}: ${v}`).join('\n');
 
 // شخصيات الوكلاء — كل واحد خبير عالميّ في مجاله، بصوت متمايز، يشاركون المعرفة والّلهجة نفسها
@@ -285,12 +287,18 @@ function detectPersona(t) {
   if (/كعبد|المبيعات|كالمبيعات|شراكه|ضم متجر|نضم متجر/.test(n)) return 'abed';
   return null;
 }
-// حارس تكلفة عام لعقل العملاء (نقطة عامّة): سقف نداءات Claude بالدقيقة + كاش قصير
+// حارس تكلفة عقل العملاء (نقطة عامّة): سقف كلّيّ + حصّة لكل IP — فلا يستنزف مهاجمٌ واحدٌ الميزة عن الجميع
 let custClaudeBurst = { n: 0, t: 0 };
-function custClaudeAllowed() {
+const custClaudeIp = new Map();            // ip -> {n, t}
+function custClaudeAllowed(ip) {
   const now = Date.now();
   if (now - custClaudeBurst.t > 60_000) custClaudeBurst = { n: 0, t: now };
-  return ++custClaudeBurst.n <= Number(process.env.CUST_CLAUDE_PER_MIN || 40);
+  let e = custClaudeIp.get(ip || '?');
+  if (!e || now - e.t > 60_000) { e = { n: 0, t: now }; custClaudeIp.set(ip || '?', e); }
+  if (custClaudeIp.size > 5000) for (const [k, v] of custClaudeIp) if (now - v.t > 60_000) custClaudeIp.delete(k);
+  if (e.n >= Number(process.env.CUST_CLAUDE_PER_IP || 8)) return false;   // حصّة IP قبل استهلاك الميزانية الكلّيّة
+  if (custClaudeBurst.n >= Number(process.env.CUST_CLAUDE_PER_MIN || 40)) return false;
+  e.n++; custClaudeBurst.n++; return true;
 }
 const custCache = new Map();               // سؤال مطبّع -> {a, at} — لا نكرّر نداء Claude لنفس السؤال
 const nrmAr = (x) => String(x || '').replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه');
@@ -1407,12 +1415,14 @@ function pinGate(req, raw, expected) {
 const pinErr = (code) => ({ error: code === 429 ? 'محاولات كثيرة — انتظر دقيقة ثم أعد المحاولة' : 'bad pin' });
 const STAGE_AR = { new: 'استلمنا طلبك، وتاليا تبحث عن أقرب موصل', assigned: 'موصلك بالطريق لاستلام طلبك من المتجر',
   picked: 'طلبك بالطريق إليك الآن 🛵', delivered: 'وصل طلبك — بالهناء والشفاء! ✓', cancelled: 'أُلغي هذا الطلب' };
+// 🛡️ بحث العميل بالرقم العلنيّ (رقم التطبيق) حصراً — لا يُطابق المعرّف الداخليّ ORD-seq
+// حتى لا يستطيع أحد تعداد طلبات الآخرين بالمشي على ORD-1..N.
 const findByRef = (q) => { const ref = String(q || '').trim(); if (!ref) return null;
-  return orders.get(refIndex.get(ref)) || orders.get(ref)
+  return orders.get(refIndex.get(ref))
     || [...orders.values()].find(x => x.ref === ref)
-    || [...closedOrders].reverse().find(x => x.ref === ref || x.id === ref) || null; };
-// الحد الأدنى الآمن للعميل: الحالة والمراحل بأوقاتها والاسم الأول للموصل والوصول المتوقع — لا أكثر
-const trackPayload = (o) => ({ ref: o.ref || null, id: o.id,
+    || [...closedOrders].reverse().find(x => x.ref === ref) || null; };
+// الحد الأدنى الآمن للعميل: الحالة والمراحل بأوقاتها والاسم الأول للموصل والوصول المتوقع — بلا معرّف داخليّ
+const trackPayload = (o) => ({ ref: o.ref || null,
   status: o.extDelivered ? 'delivered' : o.status,               // سُلّم خارج المنظومة = وصل للعميل فعلاً
   stage: o.extDelivered ? STAGE_AR.delivered : (STAGE_AR[o.status] || o.status),
   driver: o.driverName ? String(o.driverName).trim().split(/\s+/)[0] : null,
@@ -1463,7 +1473,7 @@ async function handleHttp(req, res) {
     if (process.env.ANTHROPIC_API_KEY && qn.length >= 4) {
       const hit = custCache.get(qn);
       if (hit && Date.now() - hit.at < 30 * 60_000) return json(200, { answer: hit.a, by: 'سارة', source: 'agent' });
-      if (custClaudeAllowed()) {
+      if (custClaudeAllowed(clientIp(req))) {
         try {
           const ans = await askAgent('sara', q, { forCustomer: true, maxTokens: 500,
             liveLine: 'اكتب العميل رقم طلبه إن أراد تتبّعاً دقيقاً. لا تعرضي أرقاماً تشغيليّة داخليّة.' });
