@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'sara-haiku-fix-8';         // وسم البناء: يُبدَّل مع كل دفعة ليتأكد النشر من /api/health
+const BUILD_TAG = 'sara-diag-9'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -1363,6 +1363,7 @@ function brainAnswer(q, s, staff) {
 
 // «عقل كلاودي» — طبقة الاستدلال: Claude يفكر ويخطط، لكن كل معرفة تمر عبر بوابة الأدوات
 // (EXEC_TOOLS للقراءة فقط) — ممنوع الإجابة عن حالة الشركة من ذاكرة النموذج، والأرقام من النظام حصراً.
+let lastClaudeErr = null;                  // آخر خطأ Claude (حالة/نوع فقط بلا أسرار) — للتشخيص عبر /api/health
 async function claudeCall(body) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -1370,7 +1371,11 @@ async function claudeCall(body) {
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(45_000),
   });
-  if (!r.ok) throw new Error('claude http ' + r.status);
+  if (!r.ok) {
+    let detail = ''; try { const j = await r.json(); detail = j?.error?.type || String(j?.error?.message || '').slice(0, 80); } catch {}
+    lastClaudeErr = { at: Date.now(), status: r.status, type: detail, model: body?.model || null };   // بلا مفتاح ولا نصّ العميل
+    throw new Error('claude http ' + r.status + (detail ? ' ' + detail : ''));
+  }
   return r.json();
 }
 async function askClaude(q, s, staff) {
@@ -1487,7 +1492,8 @@ async function handleHttp(req, res) {
               opsPinDistinct: Boolean(process.env.OPS_PIN) && process.env.OPS_PIN !== PIN,   // رمز اللوحة منفصل عن رمز الأجهزة؟
               usingDefault: !process.env.OPS_PIN && !process.env.DYAR_PIN },
       brainKeySet: Boolean(process.env.BRAIN_API_KEY), brainKeyDefault: !process.env.BRAIN_API_KEY,   // مفتاح REST افتراضيّ؟ (يحرس مواقع الأسطول)
-      claudeSet: Boolean(process.env.ANTHROPIC_API_KEY) });
+      claudeSet: Boolean(process.env.ANTHROPIC_API_KEY),
+      claudeErr: lastClaudeErr ? { status: lastClaudeErr.status, type: lastClaudeErr.type, model: lastClaudeErr.model, agoSec: Math.round((Date.now() - lastClaudeErr.at) / 1000) } : null });
   if (url.pathname === '/api/config' && req.method === 'GET')   // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
     return json(200, { hexKm: HEX_KM });
 
