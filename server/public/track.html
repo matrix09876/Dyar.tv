@@ -115,14 +115,18 @@ function bubble(text, me) {
   $('#msgs').appendChild(d);
   $('#msgs').scrollTop = 1e6;
 }
+// 💬 هويّة جلسة ثابتة ليتذكّر سارة سياق المحادثة (متابعة كاملة)
+const SID = (() => { let s = localStorage.getItem('dyar_sid');
+  if (!s) { s = (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)); localStorage.setItem('dyar_sid', s); } return s; })();
 $('#send').onclick = async () => {
   const q = $('#q').value.trim();
   if (!q) return;
   $('#q').value = '';
   bubble(q, true);
   try {
-    const j = await (await fetch('/api/track/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q }) })).json();
+    const j = await (await fetch('/api/track/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q, sid: SID }) })).json();
     bubble(j.answer || j.error || '…');
+    if (j.followed) bubble('✅ سجّلت طلب متابعتك — فريق ديار بيتواصل معك قريباً.');
     if (j.order && j.order.ref) { $('#ref').value = j.order.ref; track(j.order.ref); }
   } catch { bubble('تعذر الاتصال — حاول ثانية.'); }
 };
