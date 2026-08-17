@@ -108,10 +108,12 @@ async function track(ref, quiet) {
 $('#go').onclick = () => track($('#ref').value);
 $('#ref').addEventListener('keydown', e => { if (e.key === 'Enter') $('#go').onclick(); });
 
-function bubble(text, me) {
+function bubble(text, me, who) {
   const d = document.createElement('div');
   d.className = 'msg ' + (me ? 'me' : 'bot');
-  d.textContent = text;
+  if (who && !me) { const w = document.createElement('div');
+    w.style.cssText = 'font-size:11px;color:var(--muted);font-weight:700;margin-bottom:3px'; w.textContent = who; d.appendChild(w); }
+  d.appendChild(document.createTextNode(text));
   $('#msgs').appendChild(d);
   $('#msgs').scrollTop = 1e6;
 }
@@ -125,7 +127,7 @@ $('#send').onclick = async () => {
   bubble(q, true);
   try {
     const j = await (await fetch('/api/track/ask', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ q, sid: SID }) })).json();
-    bubble(j.answer || j.error || '…');
+    bubble(j.answer || j.error || '…', false, j.by && j.title ? `${j.by} · ${j.title}` : (j.by || null));
     if (j.followed) bubble('✅ سجّلت طلب متابعتك — فريق ديار بيتواصل معك قريباً.');
     if (j.order && j.order.ref) { $('#ref').value = j.order.ref; track(j.order.ref); }
   } catch { bubble('تعذر الاتصال — حاول ثانية.'); }
