@@ -61,6 +61,11 @@
       <div class="stage" id="stage"></div>
       <div class="eta" id="eta"></div>
       <div class="drv" id="drv"></div>
+      <div id="rate" style="display:none;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)">
+        <div id="rateQ" style="font-size:14px;font-weight:700;margin-bottom:6px">كيف كانت التوصيلة؟ قيّمنا 🌟</div>
+        <div id="stars" style="display:flex;gap:6px;justify-content:center;font-size:30px;cursor:pointer;user-select:none"></div>
+        <div id="rateDone" style="display:none;color:var(--ok);font-size:14px;font-weight:700;text-align:center">شكراً من القلب 🧡 تقييمك يساعدنا نتحسّن.</div>
+      </div>
     </div>
   </div>
 
@@ -101,12 +106,40 @@ async function track(ref, quiet) {
       el.classList.toggle('now', idx === i && o.status !== 'delivered');
     });
     if (o.status === 'cancelled') { $('#stage').textContent = 'أُلغي هذا الطلب — تواصل مع المكتب إن كان ذلك غير متوقع.'; }
+    showRating(ref, o.status);
     clearInterval(timer);
     if (!['delivered', 'cancelled'].includes(o.status)) timer = setInterval(() => track(ref, true), 20_000);
   } catch { if (!quiet) $('#err').textContent = 'تعذر الاتصال — حاول ثانية'; }
 }
 $('#go').onclick = () => track($('#ref').value);
 $('#ref').addEventListener('keydown', e => { if (e.key === 'Enter') $('#go').onclick(); });
+
+// ⭐ تقييم التوصيلة بعد الوصول — مرة واحدة لكل طلب (يُحفظ محلياً ولدى الخادم معاً)
+function showRating(ref, status) {
+  const box = $('#rate');
+  if (status !== 'delivered') { box.style.display = 'none'; return; }
+  box.style.display = 'block';
+  if (localStorage.getItem('dyar_rated_' + ref)) { $('#stars').style.display = 'none'; $('#rateQ').style.display = 'none'; $('#rateDone').style.display = 'block'; return; }
+  $('#stars').style.display = 'flex'; $('#rateQ').style.display = 'block'; $('#rateDone').style.display = 'none';
+  const st = $('#stars');
+  st.innerHTML = '';
+  for (let i = 1; i <= 5; i++) {
+    const b = document.createElement('span');
+    b.textContent = '☆'; b.dataset.v = i; b.setAttribute('role', 'button'); b.tabIndex = 0;
+    const pick = async () => {
+      [...st.children].forEach((x, j) => x.textContent = j < i ? '★' : '☆');
+      try {
+        const r = await (await fetch('/api/track/rate', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ ref, stars: i }) })).json();
+        if (r.ok) { localStorage.setItem('dyar_rated_' + ref, String(i));
+          $('#stars').style.display = 'none'; $('#rateQ').style.display = 'none'; $('#rateDone').style.display = 'block'; }
+      } catch {}
+    };
+    b.onclick = pick;
+    b.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') pick(); });
+    st.appendChild(b);
+  }
+}
 
 function bubble(text, me, who) {
   const d = document.createElement('div');

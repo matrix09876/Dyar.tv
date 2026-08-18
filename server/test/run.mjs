@@ -12,6 +12,7 @@ const SUITES = [
   { file: 'test/routes-matrix.mjs', name: 'مصفوفة عقود المسارات' },
   { file: 'test/agents-test.mjs', name: 'طبقة الوكلاء (سقوط آمن)' },
   { file: 'test/finance-drill.mjs', name: 'المحاسبة والديمومة' },
+  { file: 'test/phase3-drill.mjs', name: 'المرحلة ٣: زبائن وتقييمات وأداء وتصدير' },
   { file: 'test/full-drill.mjs', name: 'البروفة الشاملة' },
 ];
 let port = 8460 + Math.floor(Math.random() * 300);

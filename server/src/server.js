@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'integrated-ops-15'; // وسم البناء
+const BUILD_TAG = 'phase3-loyalty-16'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -155,7 +155,11 @@ function setOrder(o, patch) {
     closedOrders.push(orderPublic(o));
     if (closedOrders.length > 100) closedOrders.shift();
     statBump(o.status);                                          // إحصاء يومي عند الإغلاق
-    if (o.status === 'delivered') ledgerAdd(o);                  // 💰 قيد التسليم في دفتر المحاسبة
+    if (o.status === 'delivered') { ledgerAdd(o); noteDelivered(o); }   // 💰 قيد المحاسبة + ⭐ فتح نافذة التقييم
+    if (o.phone && customers.has(o.phone)) {                     // 👥 سجلّ الزبون يتعلم من كل إغلاق
+      const c = customers.get(o.phone);
+      if (o.status === 'delivered') c.delivered++; else if (o.status === 'cancelled') c.cancelled++;
+    }
     backupSoon();                                                // 💾 إغلاق طلب = تغيّر مهم — نسخ سريع لا انتظار الدقيقة
     if (o.status === 'cancelled') {                              // نمط إلغاءات متكرر ← أولوية مراجعة
       const c = statsFor(0).cancelled;
@@ -451,10 +455,67 @@ function analyticsReport(days) {
     totals: { created: trend.reduce((a, t) => a + t.created, 0), delivered: trend.reduce((a, t) => a + t.delivered, 0),
       cancelled: trend.reduce((a, t) => a + t.cancelled, 0), fees: sum2(trend.reduce((a, t) => a + t.fees, 0)),
       gmv: sum2(trend.reduce((a, t) => a + t.gmv, 0)), avgDurMin: durCnt ? Math.round(durSum / durCnt) : null },
-    drivers: [...byDriver.values()].map(d => ({ driver: d.driver, delivered: d.delivered, fees: d.fees,
-      avgDurMin: d.durCnt ? Math.round(d.durSum / d.durCnt) : null })).sort((a, b) => b.delivered - a.delivered).slice(0, 30),
+    drivers: [...byDriver.values()].map(d => {
+      const p = [...perf.values()].find(x => x.name === d.driver);   // 🛵 إثراء بالتقييم ونسبة القبول إن عُرفا
+      return { driver: d.driver, delivered: d.delivered, fees: d.fees,
+        avgDurMin: d.durCnt ? Math.round(d.durSum / d.durCnt) : null,
+        rating: p?.ratingCnt ? Math.round(p.ratingSum / p.ratingCnt * 10) / 10 : null,
+        acceptPct: p?.offers ? Math.round(p.accepted / p.offers * 100) : null };
+    }).sort((a, b) => b.delivered - a.delivered).slice(0, 30),
     stores: [...byStore.entries()].map(([store, delivered]) => ({ store, delivered }))
       .sort((a, b) => b.delivered - a.delivered).slice(0, 30) };
+}
+
+// ================= 🌟 المرحلة ٣: سجلّ الزبائن + أداء الموصّلين + تقييمات الزبائن =================
+// 👥 سجلّ الزبائن (بالهاتف، عند وروده من التطبيق): يعرف العائدين ويَسِمُ طلباتهم — محدود ويُخلى الأقدم نشاطاً
+const customers = new Map();              // phone -> {phone, orders, delivered, cancelled, firstAt, lastAt, lastRef}
+function custNote(o) {
+  if (!o.phone) return;
+  const prev = customers.get(o.phone);
+  if (prev) o.returning = prev.orders;                            // زبون عائد: كم طلباً سبق له
+  const c = prev || { phone: o.phone, orders: 0, delivered: 0, cancelled: 0, firstAt: Date.now() };
+  c.orders++; c.lastAt = Date.now(); c.lastRef = o.ref || o.id;
+  customers.set(o.phone, c);
+  if (customers.size > 2000) {                                    // الأقدم نشاطاً يُخلى أولاً
+    let oldK = null, oldT = Infinity;
+    for (const [k, v] of customers) if ((v.lastAt || 0) < oldT) { oldT = v.lastAt || 0; oldK = k; }
+    if (oldK) customers.delete(oldK);
+  }
+  backupDirty = true;
+}
+function custReport(topN = 20) {
+  let returning = 0; for (const c of customers.values()) if (c.orders > 1) returning++;
+  return { asOf: Date.now(), total: customers.size, returning,
+    top: [...customers.values()].sort((a, b) => b.orders - a.orders).slice(0, topN) };
+}
+// 🛵 أداء الموصّلين: عروض/قبول/رفض/انتهاء، ساعات اتصال، ومتوسط تقييم الزبائن — يتغذى من التدفق الحي
+const perf = new Map();                   // driverId -> {name, offers, accepted, rejected, expired, onlineMs, ratingSum, ratingCnt}
+const perfOf = (id, name) => {
+  let p = perf.get(id);
+  if (!p) { p = { name: name || id, offers: 0, accepted: 0, rejected: 0, expired: 0, onlineMs: 0, ratingSum: 0, ratingCnt: 0 };
+    perf.set(id, p); if (perf.size > 500) perf.delete(perf.keys().next().value); }
+  if (name) p.name = name;
+  return p;
+};
+function perfReport() {
+  return { asOf: Date.now(), drivers: [...perf.entries()].map(([id, p]) => ({ id, name: p.name,
+    offers: p.offers, accepted: p.accepted, rejected: p.rejected, expired: p.expired,
+    acceptPct: p.offers ? Math.round(p.accepted / p.offers * 100) : null,
+    onlineHours: Math.round(p.onlineMs / 36_000) / 100,
+    rating: p.ratingCnt ? Math.round(p.ratingSum / p.ratingCnt * 10) / 10 : null, ratings: p.ratingCnt }))
+    .sort((a, b) => b.accepted - a.accepted) };
+}
+// ⭐ تقييمات الزبائن (من صفحة التتبّع العلنيّة): تقييم واحد لكل طلب مُسلَّم، ونافذة تقييم ٢٤ ساعة بعد التسليم
+const ratings = new Map();                // ref -> {stars, at, driverId, driver, note}
+const recentDelivered = new Map();        // ref -> {driverId, driver, at} — يعيش بعد إخلاء الطلب من الذاكرة
+function noteDelivered(o) {
+  if (!o.ref && !o.id) return;
+  recentDelivered.set(String(o.ref || o.id), { driverId: o.driverId || null, driver: o.driverName || null, at: Date.now() });
+  if (recentDelivered.size > 1000) {
+    const dayAgo = Date.now() - 86_400_000;
+    for (const [k, v] of recentDelivered) if (v.at < dayAgo) recentDelivered.delete(k);
+    while (recentDelivered.size > 1000) recentDelivered.delete(recentDelivered.keys().next().value);
+  }
 }
 
 // إخلاء دوري: طلبات منتهية تجاوزت مدة الاحتفاظ + موصلون غير متصلين منذ يوم
@@ -622,9 +683,10 @@ function offerNext(o) {
   offeredNow.add(c.id);                                           // 🛡️ احجز الموصل ما دام العرض حياً — لا يُعرض عليه طلب آخر
   send(w, { t: 'offer', order: { id: o.id, title: o.title, dest: o.dest }, km: Math.round(c.km * 10) / 10,
     etaMin: c.etaMin || null, expiresInS: OFFER_TIMEOUT_MS / 1000 });
+  perfOf(c.id, c.name).offers++;                                  // 🛵 يُحصى كل عرض حقيقي وصل للموصل
   talyaSay(c.id, `طلب جديد: ${o.title}. ${c.etaMin ? `يبعد عنك ${c.etaMin} دقيقة بالطريق` : `يبعد عنك ${c.km.toFixed(1)} كيلومتر`}. اضغط قبول خلال ${OFFER_TIMEOUT_MS / 1000} ثانية.`);
   talyaFeed(`🎙 ${o.id}: أعرضه الآن على ${c.name} (${c.etaMin ? c.etaMin + ' د · ' : ''}${c.km.toFixed(1)} كم)${of.idx ? ` — المحاولة ${of.idx + 1}` : ''}…`);
-  of.timer = setTimeout(() => { offeredNow.delete(c.id); of.idx++; offerNext(o); }, OFFER_TIMEOUT_MS);
+  of.timer = setTimeout(() => { perfOf(c.id).expired++; offeredNow.delete(c.id); of.idx++; offerNext(o); }, OFFER_TIMEOUT_MS);
 }
 
 function answerOffer(o, driverId, accept) {
@@ -633,6 +695,7 @@ function answerOffer(o, driverId, accept) {
   if (!c || c.id !== driverId || o.status !== 'new') return;      // ليس المعروض عليه حالياً
   clearTimeout(of.timer);
   offeredNow.delete(driverId);                                    // حرّر الحجز فور الرد
+  (accept ? perfOf(driverId).accepted++ : perfOf(driverId).rejected++);   // 🛵 سجلّ القبول/الرفض
   if (accept) {
     // 🛡️ منع الإسناد المزدوج: إن صار للموصل طلب نشط بين العرض والقبول، ننتقل للتالي
     if (driverBusy(driverId)) { talyaFeed(`⚪ ${o.id}: ${c.name} انشغل بطلب آخر — أنتقل للتالي.`); of.idx++; return offerNext(o); }
@@ -756,6 +819,9 @@ function buildBackup() {
     context: brainMemory.context, notes: brainMemory.notes, team: brainMemory.team, faq: brainMemory.faq,
     goals: brainMemory.goals, memSeq, vapid, pushSubs: [...pushSubs.values()],
     ledger: ledger.slice(-2500),                                 // 💰 دفتر المحاسبة ينجو أيضاً (آخر ٢٥٠٠ قيد)
+    customers: [...customers.values()].slice(-2000),             // 👥 سجلّ الزبائن
+    ratings: [...ratings.entries()].slice(-1000),                // ⭐ تقييمات الزبائن
+    perf: [...perf.entries()].slice(-300),                       // 🛵 أداء الموصّلين
     // 🚚 الطلبات النشطة وإسناداتها تنجو من إعادة النشر — لا تُيتَّم توصيلة جارية
     activeOrders: [...ACTIVE.values()].map(orderPublic), orderSeq };
 }
@@ -829,6 +895,12 @@ function applyBackup(b, label) {
     if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
     if (Array.isArray(b.pushSubs)) for (const s of b.pushSubs)
       if (s?.endpoint?.startsWith('https://') && s.keys?.p256dh && s.keys?.auth && !pushSubs.has(s.endpoint)) pushSubs.set(s.endpoint, s);
+    if (!customers.size && Array.isArray(b.customers))           // 👥 سجلّ الزبائن يعود
+      for (const c of b.customers.slice(-2000)) if (c?.phone && +c.orders >= 1) customers.set(c.phone, c);
+    if (!ratings.size && Array.isArray(b.ratings))               // ⭐ التقييمات تعود
+      for (const [k, v] of b.ratings.slice(-1000)) if (k && v?.stars >= 1) ratings.set(k, v);
+    if (!perf.size && Array.isArray(b.perf))                     // 🛵 أداء الموصّلين يعود
+      for (const [k, v] of b.perf.slice(-300)) if (k && v && typeof v === 'object') perf.set(k, { ...v, _onAt: undefined });
     if (Array.isArray(b.ledger) && b.ledger.length) {            // 💰 دمج الدفتر بالمعرّف: الغرفة والقرص يساهمان معاً
       const have = new Set(ledger.map(e => e.id));               // (لا «يملأ الفارغ فقط» — فلا يطمس مصدرٌ قديم قيوداً أحدث)
       for (const e of b.ledger) if (e && e.id && e.day && !have.has(e.id)) { ledger.push(e); have.add(e.id); }
@@ -1160,6 +1232,10 @@ const EXEC_TOOLS = {
     fn: () => ({ date: dateKey(0), ...statsFor(0) }) },
   getYesterdayPerformance: { desc: 'أداء أمس كاملاً بالأرقام',
     fn: () => ({ date: dateKey(1), ...statsFor(1) }) },
+  getCustomerBase: { desc: 'سجلّ الزبائن: كم زبوناً نعرف بالهاتف، كم منهم عائد، ومن الأنشط طلبات',
+    fn: () => custReport(8) },
+  getDriverPerformance: { desc: 'أداء الموصلين: عروض/قبول/رفض، نسبة القبول، ساعات الاتصال، ومتوسط تقييم الزبائن',
+    fn: () => perfReport() },
   getFleetStatus: { desc: 'الأسطول: كل موصل متصل، هل هو مشغول بطلب، وهل عنده طوارئ، وآخر موقع وسرعة وبطارية',
     fn: () => ({ asOf: Date.now(), online: [...onlineIds].map(id => { const d = drivers.get(id);
       return { id, name: d?.name, busy: driverBusy(id), sos: !!d?.sos, last: d?.last || null }; }) }) },
@@ -1739,6 +1815,30 @@ async function handleHttp(req, res) {
       (contacts.length ? ': ' + contacts.join(' · ') : ' عبر تطبيق ديار.'), by: 'سارة' });
   }
 
+  // ⭐ تقييم الزبون لتوصيلته (علني، محدود المعدل): مرة واحدة لكل طلب مُسلَّم خلال ٢٤ ساعة — لا يكشف شيئاً داخلياً
+  if (url.pathname === '/api/track/rate' && req.method === 'POST') {
+    if (!rateOk(req, 10)) return json(429, { error: 'محاولات كثيرة — انتظر دقيقة' });
+    const b = await readBody(req);
+    const ref = String(b.ref || '').trim().slice(0, 40);
+    const stars = Math.round(+b.stars);
+    if (!ref || !(stars >= 1 && stars <= 5)) return json(400, { error: 'ref و stars (1-5) مطلوبان' });
+    const o = findByRef(ref);
+    const rd = recentDelivered.get(ref);
+    if (!((o && (o.status === 'delivered' || o.extDelivered)) || rd))
+      return json(404, { ok: false, error: 'لا نجد توصيلة مُسلَّمة بهذا الرقم' });
+    if (ratings.has(ref)) return json(200, { ok: true, already: true });
+    const drvId = rd?.driverId || o?.driverId || null, drvName = rd?.driver || o?.driverName || null;
+    ratings.set(ref, { stars, at: Date.now(), driverId: drvId, driver: drvName,
+      note: String(b.note || '').slice(0, 140) || null });
+    if (ratings.size > 4000) ratings.delete(ratings.keys().next().value);
+    if (drvId) { const p = perfOf(drvId, drvName); p.ratingSum += stars; p.ratingCnt++; }
+    if (stars <= 2) prOpen('rate:' + ref, { type: 'low_rating', score: 62,   // ⚡ تقييم منخفض = أولوية خدمة فورية
+      title: `تقييم منخفض (${stars}★) للطلب ${ref}${drvName ? ' — الموصل ' + drvName : ''}`,
+      assignedRole: 'support', recommendedAction: 'اتصلوا بالزبون، اعتذروا واعرفوا ما جرى، وسجّلوا النتيجة' });
+    backupSoon();
+    return json(200, { ok: true, stars });
+  }
+
   // ===== 📺 شاشة عقل ديار (kiosk) — محمية برمز اللوحة OPS_PIN =====
   if (url.pathname === '/api/brain/summary' && req.method === 'GET') {
     { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
@@ -1832,6 +1932,32 @@ async function handleHttp(req, res) {
   if (url.pathname === '/api/brain/analytics' && req.method === 'GET') {
     { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     return json(200, { asOf: Date.now(), ...analyticsReport(url.searchParams.get('days')) });
+  }
+  // 👥 سجلّ الزبائن: كم نعرف، كم عائداً، والأنشط — لبناء الولاء والاسترجاع
+  if (url.pathname === '/api/brain/customers' && req.method === 'GET') {
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
+    return json(200, custReport(20));
+  }
+  // 🛵 أداء الموصّلين: قبول العروض وساعات الاتصال ومتوسط تقييم الزبائن
+  if (url.pathname === '/api/brain/performance' && req.method === 'GET') {
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
+    return json(200, perfReport());
+  }
+  // 📦 تصدير نسخة كاملة مستقلة من كل بيانات ديار — ملف JSON ينزل للجهاز (استقلال تام عن أي خدمة)
+  if (url.pathname === '/api/brain/export' && req.method === 'GET') {
+    { const g = pinGate(req, req.headers['x-kiosk-pin'] || url.searchParams.get('pin'), OPS_PIN); if (g) return json(g, pinErr(g)); }
+    res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
+      'content-disposition': `attachment; filename="dyar-backup-${dateKey()}.json"` });
+    return res.end(JSON.stringify({ exportedAt: Date.now(), v: BUILD_TAG, backup: buildBackup() }, null, 1));
+  }
+  // 📥 استيراد نسخة مُصدَّرة: يملأ ما هو فارغ فقط (لا يدهس بيانات حيّة) — للاستعادة على خادم جديد
+  if (url.pathname === '/api/brain/import' && req.method === 'POST') {
+    const b = await readBody(req);
+    { const g = pinGate(req, b.pin, OPS_PIN); if (g) return json(g, pinErr(g)); }
+    if (!b.backup || typeof b.backup !== 'object') return json(400, { error: 'ملف نسخة غير صالح — أرسل {backup}' });
+    applyBackup(b.backup, 'استيراد يدوي');
+    backupSoon();
+    return json(200, { ok: true, stores: stores.size, customers: customers.size, ledger: ledger.length });
   }
   // إجراء على أولوية من أي واجهة: {pin, id, action: ack|start|resolve|reassign, who, note}
   if (url.pathname === '/api/brain/priority-action' && req.method === 'POST') {
@@ -1938,6 +2064,7 @@ async function handleHttp(req, res) {
       const gl = +b.origin?.lat, gg = +b.origin?.lng;           // موقع متجر التطبيق إن أُرسل — وإلا مطابقة بالاسم
       if (Number.isFinite(gl) && Number.isFinite(gg) && Math.abs(gl) <= 90 && Math.abs(gg) <= 180) o.origin = { lat: gl, lng: gg };
       linkStore(o);
+      custNote(o);                                              // 👥 سجلّ الزبون + وسم «عائد» إن عرفناه
       orders.set(o.id, o); ACTIVE.set(o.id, o);
       if (ref) refIndex.set(ref, o.id);
       statBump('created');
@@ -2099,6 +2226,7 @@ wss.on('connection', (ws, req) => {
             history: [{ st: 'new', at: Date.now(), d: null }],
             createdAt: Date.now(), updatedAt: Date.now() };
           linkStore(o);                                         // متجر مذكور بالعنوان ⟵ التقاط ثنائي الأرجل
+          custNote(o);
           orders.set(o.id, o);
           ACTIVE.set(o.id, o);
           statBump('created');
@@ -2157,6 +2285,7 @@ wss.on('connection', (ws, req) => {
       driverClients.set(ws, id);
       driverToWs.set(id, ws);
       onlineIds.add(id);
+      d._onAt ||= Date.now();                                  // 🛵 بداية جلسة الاتصال (لا تُعاد عند مقبس بديل)
       if (d.last) indexDriver(id, d.last.lat, d.last.lng);     // عودة اتصال بموقع معروف ⟵ يعود للفهرس
       send(ws, { t: 'ok', id, channel: 'العمليات العامة', online: onlineCount(), order: driverActiveOrder(id) });
       broadcastOps({ t: 'driver', d: publicInfo(d) });
@@ -2222,6 +2351,7 @@ wss.on('connection', (ws, req) => {
         onlineIds.delete(id);
         unindexDriver(id);                                     // خرج من الفهرس — لا يُعرض عليه شيء
         d.online = false; d.lastSeen = Date.now();
+        if (d._onAt) { perfOf(id, d.name).onlineMs += Date.now() - d._onAt; d._onAt = null; backupDirty = true; }   // 🛵 ساعات الاتصال
         broadcastOps({ t: 'presence', id, online: false, lastSeen: d.lastSeen });
         brainEvent('driver_offline', { driver: publicInfo(d) });
         pushStats();
