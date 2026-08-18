@@ -17,23 +17,34 @@ const SUITES = [
 let port = 8460 + Math.floor(Math.random() * 300);
 let failed = 0;
 
-for (const s of SUITES) {
-  const P = String(++port);
-  const stateDir = mkdtempSync(join(tmpdir(), 'dyar-state-'));
-  console.log(`\n════ ${s.name} (منفذ ${P}) ════`);
-  const srv = spawn('node', ['src/server.js'], {
-    env: { ...process.env, PORT: P, OPS_PIN: '1234', DYAR_PIN: '1234', BRAIN_API_KEY: 'dyar-brain-key',
-      PIN_MAX_PER_MIN: '100000', BRAIN_PANEL_URL: '', BRAIN_WEBHOOK_URL: '', ANTHROPIC_API_KEY: '',
-      STATE_DIR: stateDir },
-    stdio: ['ignore', 'ignore', 'pipe'],
-  });
-  srv.stderr.on('data', (d) => process.stderr.write('[srv] ' + d));
-  let up = false;
-  for (let i = 0; i < 50 && !up; i++) {
-    try { up = (await fetch(`http://127.0.0.1:${P}/api/health`)).ok; } catch {}
-    if (!up) await sleep(300);
+// إقلاع بمحاولات: منفذ مشغول (تصادم عشوائي في CI) ⟵ جرّب المنفذ التالي بدل الفشل
+async function bootServer(stateDir) {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const P = String(++port);
+    const srv = spawn('node', ['src/server.js'], {
+      env: { ...process.env, PORT: P, OPS_PIN: '1234', DYAR_PIN: '1234', BRAIN_API_KEY: 'dyar-brain-key',
+        PIN_MAX_PER_MIN: '100000', BRAIN_PANEL_URL: '', BRAIN_WEBHOOK_URL: '', ANTHROPIC_API_KEY: '',
+        STATE_DIR: stateDir },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    srv.stderr.on('data', (d) => process.stderr.write('[srv] ' + d));
+    let dead = false; srv.on('exit', () => { dead = true; });
+    for (let i = 0; i < 50 && !dead; i++) {
+      try { if ((await fetch(`http://127.0.0.1:${P}/api/health`)).ok) return { srv, P }; } catch {}
+      await sleep(300);
+    }
+    srv.kill('SIGKILL');
+    console.warn(`… المنفذ ${P} لم يُجب (مشغول؟) — محاولة على المنفذ التالي`);
   }
-  if (!up) { console.error('✗ الخادم لم يُقلع'); srv.kill('SIGKILL'); failed++; break; }
+  return null;
+}
+
+for (const s of SUITES) {
+  const stateDir = mkdtempSync(join(tmpdir(), 'dyar-state-'));
+  const booted = await bootServer(stateDir);
+  if (!booted) { console.error('✗ الخادم لم يُقلع بعد 4 محاولات'); failed++; rmSync(stateDir, { recursive: true, force: true }); break; }
+  const { srv, P } = booted;
+  console.log(`\n════ ${s.name} (منفذ ${P}) ════`);
   const code = await new Promise((res) => {
     const t = spawn('node', [s.file], { env: { ...process.env, DP: P, STATE_DIR: stateDir }, stdio: 'inherit' });
     t.on('exit', res); t.on('error', () => res(1));

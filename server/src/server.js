@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'integrated-ops-14'; // وسم البناء
+const BUILD_TAG = 'integrated-ops-15'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -39,9 +39,10 @@ const pinOk = (got, want) => {
   return false;
 };
 const BRAIN_API_KEY = process.env.BRAIN_API_KEY || 'dyar-brain-key';
-const BRAIN_PANEL_URL = process.env.BRAIN_PANEL_URL || 'https://egint-support.onrender.com';
-const BRAIN_WEBHOOK_URL = process.env.BRAIN_WEBHOOK_URL
-  || (BRAIN_PANEL_URL ? BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect' : '');
+// 🛡️ '' صراحةً = وصلة معطَّلة (اختبارات/CI فلا تلمس الإنتاج أبداً) — الافتراضي فقط عندما يكون المتغير غير معرَّف
+const BRAIN_PANEL_URL = (process.env.BRAIN_PANEL_URL ?? 'https://egint-support.onrender.com').trim();
+const BRAIN_WEBHOOK_URL = (process.env.BRAIN_WEBHOOK_URL
+  ?? (BRAIN_PANEL_URL ? BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect' : '')).trim();
 // عنوان هذه الخدمة العلني — Render يوفره تلقائياً (RENDER_EXTERNAL_URL) — لازم للتسجيل الذاتي لدى غرفة التشغيل
 const SELF_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
 const PUB = fileURLToPath(new URL('../public', import.meta.url));
@@ -389,6 +390,7 @@ const statsFor = (off) => dailyStats.get(dateKey(off)) || { created: 0, delivere
 const FEE_SHARE = Math.min(1, Math.max(0, Number(process.env.DRIVER_FEE_SHARE ?? 0.8)));
 const ledger = [];                        // [{id, ref, day, at, driverId, driver, store, price, fee, durMin}]
 const money = (v, cap = 100000) => { const n = +v; return Number.isFinite(n) && n >= 0 ? Math.min(cap, Math.round(n * 100) / 100) : 0; };
+const sum2 = (v) => Math.round((+v || 0) * 100) / 100;   // للمجاميع: تقريب أغورتين بلا سقف — السقف للقيد المفرد فقط
 // هاتف الزبون (اختياري من التطبيق): أرقام فقط بصيغة دولية اختيارية — للموصّل وإشعارات الحالة، ولا يُبثّ علنياً أبداً
 const custPhone = (v) => { const p = normDigits(v).replace(/[^\d+]/g, ''); return /^\+?\d{7,15}$/.test(p) ? p : null; };
 function ledgerAdd(o) {
@@ -399,7 +401,7 @@ function ledgerAdd(o) {
     price: money(o.price), fee: money(o.fee), durMin });
   if (ledger.length > 5000) ledger.splice(0, ledger.length - 5000);
   const s = dailyStats.get(dateKey()); if (s) {                  // إثراء إحصاء اليوم للتحليلات (بلا كسر الشكل القديم)
-    s.fees = money((s.fees || 0) + money(o.fee)); s.gmv = money((s.gmv || 0) + money(o.price));
+    s.fees = sum2((s.fees || 0) + money(o.fee)); s.gmv = sum2((s.gmv || 0) + money(o.price));
     if (durMin != null) { s.durSum = (s.durSum || 0) + durMin; s.durCnt = (s.durCnt || 0) + 1; }
   }
   backupDirty = true;
@@ -409,18 +411,18 @@ function financeDay(day) {
   const rows = new Map();
   let totFee = 0, totPrice = 0, n = 0;
   for (const e of ledger) if (e.day === day) {
-    n++; totFee = money(totFee + e.fee); totPrice = money(totPrice + e.price);
+    n++; totFee = sum2(totFee + e.fee); totPrice = sum2(totPrice + e.price);
     const k = e.driverId || e.driver || '؟';
     const r = rows.get(k) || { driverId: e.driverId, driver: e.driver || 'غير مسجّل', delivered: 0, fees: 0, collected: 0 };
-    r.delivered++; r.fees = money(r.fees + e.fee); r.collected = money(r.collected + e.price);
+    r.delivered++; r.fees = sum2(r.fees + e.fee); r.collected = sum2(r.collected + e.price);
     rows.set(k, r);
   }
   const drivers = [...rows.values()].map(r => ({ ...r,
-    due: money(r.fees * FEE_SHARE),                              // مستحق الموصّل من أجور التوصيل
-    handover: money(r.collected + r.fees * (1 - FEE_SHARE)) }))  // ما يسلّمه للمكتب: المُحصَّل + حصة الشركة من الأجرة
+    due: sum2(r.fees * FEE_SHARE),                               // مستحق الموصّل من أجور التوصيل
+    handover: sum2(r.collected + r.fees * (1 - FEE_SHARE)) }))   // ما يسلّمه للمكتب: المُحصَّل + حصة الشركة من الأجرة
     .sort((a, b) => b.delivered - a.delivered);
   return { day, delivered: n, fees: totFee, collected: totPrice,
-    companyShare: money(totFee * (1 - FEE_SHARE)), driversShare: money(totFee * FEE_SHARE),
+    companyShare: sum2(totFee * (1 - FEE_SHARE)), driversShare: sum2(totFee * FEE_SHARE),
     feeShare: FEE_SHARE, drivers };
 }
 // تحليلات تاريخية: اتجاه يومي (حتى ٣٥ يوماً) + أداء الموصّلين والمتاجر من الدفتر
@@ -430,7 +432,7 @@ function analyticsReport(days) {
   for (let off = nDays - 1; off >= 0; off--) {
     const k = dateKey(off), s = dailyStats.get(k) || {};
     trend.push({ day: k, created: s.created || 0, delivered: s.delivered || 0, cancelled: s.cancelled || 0,
-      escalated: s.escalated || 0, sos: s.sos || 0, fees: money(s.fees || 0), gmv: money(s.gmv || 0),
+      escalated: s.escalated || 0, sos: s.sos || 0, fees: sum2(s.fees || 0), gmv: sum2(s.gmv || 0),
       avgDurMin: s.durCnt ? Math.round(s.durSum / s.durCnt) : null });
   }
   const cutoff = dateKey(nDays - 1);
@@ -440,15 +442,15 @@ function analyticsReport(days) {
     if (e.durMin != null) { durSum += e.durMin; durCnt++; }
     const dk = e.driver || 'غير مسجّل';
     const d = byDriver.get(dk) || { driver: dk, delivered: 0, fees: 0, durSum: 0, durCnt: 0 };
-    d.delivered++; d.fees = money(d.fees + e.fee);
+    d.delivered++; d.fees = sum2(d.fees + e.fee);
     if (e.durMin != null) { d.durSum += e.durMin; d.durCnt++; }
     byDriver.set(dk, d);
     if (e.store) byStore.set(e.store, (byStore.get(e.store) || 0) + 1);
   }
   return { days: nDays, trend,
     totals: { created: trend.reduce((a, t) => a + t.created, 0), delivered: trend.reduce((a, t) => a + t.delivered, 0),
-      cancelled: trend.reduce((a, t) => a + t.cancelled, 0), fees: money(trend.reduce((a, t) => a + t.fees, 0)),
-      gmv: money(trend.reduce((a, t) => a + t.gmv, 0)), avgDurMin: durCnt ? Math.round(durSum / durCnt) : null },
+      cancelled: trend.reduce((a, t) => a + t.cancelled, 0), fees: sum2(trend.reduce((a, t) => a + t.fees, 0)),
+      gmv: sum2(trend.reduce((a, t) => a + t.gmv, 0)), avgDurMin: durCnt ? Math.round(durSum / durCnt) : null },
     drivers: [...byDriver.values()].map(d => ({ driver: d.driver, delivered: d.delivered, fees: d.fees,
       avgDurMin: d.durCnt ? Math.round(d.durSum / d.durCnt) : null })).sort((a, b) => b.delivered - a.delivered).slice(0, 30),
     stores: [...byStore.entries()].map(([store, delivered]) => ({ store, delivered }))
@@ -792,13 +794,16 @@ async function gracefulExit(sig) {
   if (shuttingDown) return; shuttingDown = true;
   console.log(`[🛑] ${sig} — حفظ الحالة قبل الإطفاء…`);
   try {
-    const backup = buildBackup();
-    snapshotLocal(backup);
-    if (BRAIN_WEBHOOK_URL && process.env.BRAIN_API_KEY)
-      await fetch(BRAIN_WEBHOOK_URL, { method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-api-key': BRAIN_API_KEY },
-        body: JSON.stringify({ event: 'state_backup', at: Date.now(), backup }),
-        signal: AbortSignal.timeout(5000) }).catch(() => {});
+    // 🛡️ إطفاء قبل اكتمال الاستعادة = الذاكرة ما تزال فارغة — الكتابة حينها تطمس النسختين الجيدتين
+    if (restoreDone) {
+      const backup = buildBackup();
+      snapshotLocal(backup);
+      if (BRAIN_WEBHOOK_URL && process.env.BRAIN_API_KEY)
+        await fetch(BRAIN_WEBHOOK_URL, { method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-api-key': BRAIN_API_KEY },
+          body: JSON.stringify({ event: 'state_backup', at: Date.now(), backup }),
+          signal: AbortSignal.timeout(5000) }).catch(() => {});
+    }
   } catch {}
   process.exit(0);
 }
@@ -824,8 +829,12 @@ function applyBackup(b, label) {
     if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
     if (Array.isArray(b.pushSubs)) for (const s of b.pushSubs)
       if (s?.endpoint?.startsWith('https://') && s.keys?.p256dh && s.keys?.auth && !pushSubs.has(s.endpoint)) pushSubs.set(s.endpoint, s);
-    if (!ledger.length && Array.isArray(b.ledger))               // 💰 دفتر المحاسبة يعود كما كان
-      ledger.push(...b.ledger.filter(e => e && e.id && e.day).slice(-2500));
+    if (Array.isArray(b.ledger) && b.ledger.length) {            // 💰 دمج الدفتر بالمعرّف: الغرفة والقرص يساهمان معاً
+      const have = new Set(ledger.map(e => e.id));               // (لا «يملأ الفارغ فقط» — فلا يطمس مصدرٌ قديم قيوداً أحدث)
+      for (const e of b.ledger) if (e && e.id && e.day && !have.has(e.id)) { ledger.push(e); have.add(e.id); }
+      ledger.sort((x, y) => (x.at || 0) - (y.at || 0));
+      if (ledger.length > 5000) ledger.splice(0, ledger.length - 5000);
+    }
     // 🚚 استعادة الطلبات النشطة: تُعاد للفهارس، والمُسنَدة تنتظر عودة الموصل، والجديدة يُعاد عرضها بعد الإقلاع
     let restoredNew = 0;
     if (Array.isArray(b.activeOrders)) {
@@ -1882,8 +1891,8 @@ async function handleHttp(req, res) {
       return json(200, { drivers: [...drivers.values()].map(d => ({ ...publicInfo(d), trail: undefined })) });
 
     // الطلبات النشطة ومساراتها — لصفحة الطلبات في غرفة التشغيل
-    if (url.pathname === '/api/v1/orders' && req.method === 'GET')
-      return json(200, { orders: activeOrdersList() });
+    if (url.pathname === '/api/v1/orders' && req.method === 'GET')   // 🛡️ بلا هاتف الزبون: غرفة التشغيل لا تحتاجه من هنا
+      return json(200, { orders: activeOrdersList().map(({ phone, ...rest }) => rest) });
 
     // 🎙 جسر التطبيق ⟵ تاليا: غرفة التشغيل تدفع طلب التطبيق هنا فتتولاه الموزّعة فوراً
     // {ref, title, dest:{lat,lng}} إنشاء (idempotent بالمرجع) · {ref, action:'cancelled'|'delivered'} مزامنة حالة
@@ -1921,7 +1930,8 @@ async function handleHttp(req, res) {
         dest: { lat, lng }, driverId: null, driverName: null,
         status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
         // 💰 حقول المحاسبة والإشعار من التطبيق: قيمة الطلب، أجرة التوصيل، وهاتف الزبون (لا يُبثّ علنياً أبداً)
-        price: money(b.price), fee: money(b.fee, 1000) || money(process.env.DELIVERY_FEE_DEFAULT, 1000),
+        // fee=0 صراحةً = توصيل مجاني ويُحترم — الافتراضي فقط عند غياب الحقل كلياً
+        price: money(b.price), fee: b.fee != null ? money(b.fee, 1000) : money(process.env.DELIVERY_FEE_DEFAULT, 1000),
         phone: custPhone(b.phone),
         history: [{ st: 'new', at: Date.now(), d: 'التطبيق' }],
         createdAt: Date.now(), updatedAt: Date.now() };
@@ -2084,7 +2094,7 @@ wss.on('connection', (ws, req) => {
           const o = { id: 'ORD-' + (++orderSeq), title: String(m.title).slice(0, 80),
             dest: { lat: +m.dest.lat, lng: +m.dest.lng }, driverId: null, driverName: null,
             status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
-            price: money(m.price), fee: money(m.fee, 1000) || money(process.env.DELIVERY_FEE_DEFAULT, 1000),
+            price: money(m.price), fee: m.fee != null ? money(m.fee, 1000) : money(process.env.DELIVERY_FEE_DEFAULT, 1000),
             phone: custPhone(m.phone),
             history: [{ st: 'new', at: Date.now(), d: null }],
             createdAt: Date.now(), updatedAt: Date.now() };

@@ -16,7 +16,6 @@ async function req(method, path, { body, headers } = {}) {
 console.log('— علنية (بلا رمز): تعمل وتُرجع الحد الأدنى الآمن —');
 ck('GET /api/health = 200', (await req('GET', '/api/health')).st === 200);
 ck('GET /api/health لا يكشف قيمة رمز', !/1234/.test(JSON.stringify((await req('GET', '/api/health')).j)));
-ck('GET /api/config = 200 بلا عنوان داخلي', (() => { }, true));
 { const c = await req('GET', '/api/config'); ck('GET /api/config بلا brainPanelUrl', c.st === 200 && !c.j.brainPanelUrl, JSON.stringify(c.j)); }
 ck('GET /api/track بلا ref = 404/400', [400, 404].includes((await req('GET', '/api/track')).st), (await req('GET', '/api/track')).st);
 ck('GET /api/track?ref=مجهول = 404', (await req('GET', '/api/track?ref=99999999')).st === 404);
