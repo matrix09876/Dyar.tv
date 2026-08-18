@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'multi-agent-desk-12'; // وسم البناء
+const BUILD_TAG = 'prompt-cache-13'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -292,7 +292,8 @@ async function askAgent(personaKey, q, opts = {}) {
   const messages = [...history, { role: 'user', content: parts.join('\n') }];
   // العميل: نموذج سريع اقتصادي (نقطة عامّة) — الداخلي: النموذج التنفيذيّ الأقوى
   const model = opts.model || (opts.forCustomer ? (process.env.CUST_MODEL || 'claude-haiku-4-5') : (process.env.BRAIN_MODEL || 'claude-opus-5'));
-  const body = { model, max_tokens: opts.maxTokens || 700, system, messages };
+  // 💾 نُرسل التعليمات ككتلة معلّمة بـ cache_control: البادئة الثابتة تُخزَّن وتُقرأ بخصم عند تكرارها
+  const body = { model, max_tokens: opts.maxTokens || 700, system: cachedSystem(system), messages };
   // «التفكير المتكيّف» مدعوم على 4.6+ فقط — Haiku 4.5 يرفضه (400). نُفعّله للنماذج الأقوى دون السريع
   if (!/haiku|claude-3|claude-instant/i.test(model)) body.thinking = { type: 'adaptive' };
   const j = await claudeCall(body);
@@ -1375,6 +1376,11 @@ function brainAnswer(q, s, staff) {
 // «عقل كلاودي» — طبقة الاستدلال: Claude يفكر ويخطط، لكن كل معرفة تمر عبر بوابة الأدوات
 // (EXEC_TOOLS للقراءة فقط) — ممنوع الإجابة عن حالة الشركة من ذاكرة النموذج، والأرقام من النظام حصراً.
 let lastClaudeErr = null;                  // آخر خطأ Claude (حالة/نوع فقط بلا أسرار) — للتشخيص عبر /api/health
+// 💾 «تخزين البرومبت المؤقّت» (Prompt caching): نضع نقطة تخزين على البادئة الثابتة (التعليمات + المعرفة + الأدوات)
+// المشتركة بين كل نداءات الوكلاء. عند تكرارها خلال ~٥ دقائق تُقرأ من الذاكرة بخصم ~٩٠٪ بدل إعادة معالجتها.
+// دالة صغيرة تحوّل نصّ التعليمات إلى كتلة نصّيّة معلّمة بـ cache_control (الحد الأدنى للتخزين ~1024 توكن).
+const cachedSystem = (text) => [{ type: 'text', text, cache_control: { type: 'ephemeral' } }];
+let lastCacheStats = null;                 // آخر إحصاء تخزين (توكنات فقط) — لإثبات فعاليّة الميزة عبر /api/health
 async function claudeCall(body) {
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
@@ -1387,7 +1393,11 @@ async function claudeCall(body) {
     lastClaudeErr = { at: Date.now(), status: r.status, type, msg, model: body?.model || null };   // بلا مفتاح ولا نصّ العميل
     throw new Error('claude http ' + r.status + ' ' + type + ' ' + msg);
   }
-  return r.json();
+  const j = await r.json();
+  const u = j.usage || {};                 // توكنات فقط — لا نصّ ولا أسرار
+  if (u.cache_read_input_tokens != null || u.cache_creation_input_tokens != null)
+    lastCacheStats = { at: Date.now(), read: u.cache_read_input_tokens || 0, created: u.cache_creation_input_tokens || 0, input: u.input_input_tokens || u.input_tokens || 0 };
+  return j;
 }
 async function askClaude(q, s, staff) {
   const system = 'أنت «عقل ديار التنفيذي» — المستشار الإداري الحي لشركة ديار للتوصيل في الجليل ' +
@@ -1407,7 +1417,9 @@ async function askClaude(q, s, staff) {
     (brainMemory.notes.length ? `🗒 ملاحظات المكتب المفتوحة: ${brainMemory.notes.slice(-8).map(x => `(${x.n}) ${x.text}`).join(' | ')}\n` : '') +
     (staff ? `المتحدث: ${String(staff).slice(0, 60)}\n` : '') + `السؤال: ${q}` }];
   const brainModel = process.env.BRAIN_MODEL || 'claude-opus-5';
-  const base = { model: brainModel, max_tokens: 1200, system, tools: execToolDefs(),
+  // 💾 البادئة الثابتة هنا كبيرة (تعليمات + تعريفات الأدوات) وتتكرّر عبر جولات الأدوات الأربع لكل سؤال —
+  // نقطة تخزين على كتلة التعليمات تُخزّن (الأدوات ثم التعليمات) وتُقرأ بخصم في كل جولة تالية.
+  const base = { model: brainModel, max_tokens: 1200, system: cachedSystem(system), tools: execToolDefs(),
     ...(!/haiku|claude-3|claude-instant/i.test(brainModel) ? { thinking: { type: 'adaptive' } } : {}) };
   let j = await claudeCall({ ...base, messages });
   for (let round = 0; round < 4 && j.stop_reason === 'tool_use'; round++) {   // حلقة الأدوات — 4 جولات كحد أقصى
@@ -1506,7 +1518,10 @@ async function handleHttp(req, res) {
       claudeSet: Boolean(process.env.ANTHROPIC_API_KEY),
       claudeErr: lastClaudeErr ? { status: lastClaudeErr.status, type: lastClaudeErr.type, model: lastClaudeErr.model,
         hint: lastClaudeErr.status === 400 && /credit|balance|billing/i.test(lastClaudeErr.msg || '') ? 'أضف رصيداً في Anthropic (Plans & Billing)' : null,
-        agoSec: Math.round((Date.now() - lastClaudeErr.at) / 1000) } : null });
+        agoSec: Math.round((Date.now() - lastClaudeErr.at) / 1000) } : null,
+      // 💾 إثبات فعاليّة تخزين البرومبت: توكنات مقروءة من الذاكرة مقابل توكنات مُنشأة (بلا نصّ ولا أسرار)
+      promptCache: { on: true, ...(lastCacheStats ? { read: lastCacheStats.read, created: lastCacheStats.created,
+        hit: lastCacheStats.read > 0, agoSec: Math.round((Date.now() - lastCacheStats.at) / 1000) } : { read: 0, created: 0, hit: false }) } });
   if (url.pathname === '/api/config' && req.method === 'GET')   // إعدادات علنية آمنة فقط — لا نكشف عنوان غرفة التشغيل الداخلي
     return json(200, { hexKm: HEX_KM });
 
