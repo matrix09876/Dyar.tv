@@ -10,7 +10,7 @@
 
 import { createServer as createHttp } from 'node:http';
 import { createServer as createHttps } from 'node:https';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, writeFileSync, mkdirSync, renameSync } from 'node:fs';
 import { networkInterfaces } from 'node:os';
 import { extname, join, normalize, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'prompt-cache-13'; // وسم البناء
+const BUILD_TAG = 'integrated-ops-14'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -154,6 +154,8 @@ function setOrder(o, patch) {
     closedOrders.push(orderPublic(o));
     if (closedOrders.length > 100) closedOrders.shift();
     statBump(o.status);                                          // إحصاء يومي عند الإغلاق
+    if (o.status === 'delivered') ledgerAdd(o);                  // 💰 قيد التسليم في دفتر المحاسبة
+    backupSoon();                                                // 💾 إغلاق طلب = تغيّر مهم — نسخ سريع لا انتظار الدقيقة
     if (o.status === 'cancelled') {                              // نمط إلغاءات متكرر ← أولوية مراجعة
       const c = statsFor(0).cancelled;
       if (c >= 3) prOpen('cancels:' + dateKey(), { type: 'cancels', score: Math.min(70, 48 + c * 2),
@@ -188,7 +190,7 @@ function memAdd(kind, text, by) {
   const item = { n: ++memSeq, text: String(text).slice(0, 200), by: by || null, at: Date.now() };
   arr.push(item);
   if (arr.length > 200) arr.shift();
-  backupDirty = true;
+  backupSoon();                            // 💾 معرفة المكتب ثمينة — نسخ سريع لا انتظار الدقيقة
   return item;
 }
 const memRemove = (kind, n) => { const arr = brainMemory[kind], i = arr.findIndex(x => x.n === +n);
@@ -376,10 +378,82 @@ function statBump(kind, off = 0) {
   const s = dailyStats.get(k) || { created: 0, delivered: 0, cancelled: 0, escalated: 0, sos: 0 };
   if (kind in s) s[kind]++;
   dailyStats.set(k, s);
-  if (dailyStats.size > 8) { const oldest = [...dailyStats.keys()].sort()[0]; dailyStats.delete(oldest); }
+  if (dailyStats.size > 35) { const oldest = [...dailyStats.keys()].sort()[0]; dailyStats.delete(oldest); }   // 📈 ٣٥ يوماً للتحليلات
   backupDirty = true;                                            // 💾 يُنسخ لغرفة التشغيل خلال دقيقة
 }
 const statsFor = (off) => dailyStats.get(dateKey(off)) || { created: 0, delivered: 0, cancelled: 0, escalated: 0, sos: 0 };
+
+// ================= 💰 المحاسبة والتسوية: دفتر توصيلات مُغلق + مستحقات الموصّلين =================
+// كل تسليم يُقيَّد في الدفتر بقيمة الطلب وأجرة التوصيل ومدّته وموصّله — فتُبنى التسوية اليومية
+// والتحليلات من قيود حقيقية لا تقديرات. حصّة الموصّل من الأجرة قابلة للضبط (DRIVER_FEE_SHARE).
+const FEE_SHARE = Math.min(1, Math.max(0, Number(process.env.DRIVER_FEE_SHARE ?? 0.8)));
+const ledger = [];                        // [{id, ref, day, at, driverId, driver, store, price, fee, durMin}]
+const money = (v, cap = 100000) => { const n = +v; return Number.isFinite(n) && n >= 0 ? Math.min(cap, Math.round(n * 100) / 100) : 0; };
+// هاتف الزبون (اختياري من التطبيق): أرقام فقط بصيغة دولية اختيارية — للموصّل وإشعارات الحالة، ولا يُبثّ علنياً أبداً
+const custPhone = (v) => { const p = normDigits(v).replace(/[^\d+]/g, ''); return /^\+?\d{7,15}$/.test(p) ? p : null; };
+function ledgerAdd(o) {
+  const durMin = o.createdAt ? Math.max(0, Math.round((Date.now() - o.createdAt) / 60_000)) : null;
+  ledger.push({ id: o.id, ref: o.ref || null, day: dateKey(), at: Date.now(),
+    driverId: o.driverId || null, driver: o.driverName || null,
+    store: o.storeId ? (stores.get(o.storeId)?.name || null) : null,
+    price: money(o.price), fee: money(o.fee), durMin });
+  if (ledger.length > 5000) ledger.splice(0, ledger.length - 5000);
+  const s = dailyStats.get(dateKey()); if (s) {                  // إثراء إحصاء اليوم للتحليلات (بلا كسر الشكل القديم)
+    s.fees = money((s.fees || 0) + money(o.fee)); s.gmv = money((s.gmv || 0) + money(o.price));
+    if (durMin != null) { s.durSum = (s.durSum || 0) + durMin; s.durCnt = (s.durCnt || 0) + 1; }
+  }
+  backupDirty = true;
+}
+// تسوية يوم واحد: لكل موصّل عدد توصيلاته ومجموع الأجرة وقيمة الطلبات المُحصَّلة ومستحقّه (حصّته من الأجرة)
+function financeDay(day) {
+  const rows = new Map();
+  let totFee = 0, totPrice = 0, n = 0;
+  for (const e of ledger) if (e.day === day) {
+    n++; totFee = money(totFee + e.fee); totPrice = money(totPrice + e.price);
+    const k = e.driverId || e.driver || '؟';
+    const r = rows.get(k) || { driverId: e.driverId, driver: e.driver || 'غير مسجّل', delivered: 0, fees: 0, collected: 0 };
+    r.delivered++; r.fees = money(r.fees + e.fee); r.collected = money(r.collected + e.price);
+    rows.set(k, r);
+  }
+  const drivers = [...rows.values()].map(r => ({ ...r,
+    due: money(r.fees * FEE_SHARE),                              // مستحق الموصّل من أجور التوصيل
+    handover: money(r.collected + r.fees * (1 - FEE_SHARE)) }))  // ما يسلّمه للمكتب: المُحصَّل + حصة الشركة من الأجرة
+    .sort((a, b) => b.delivered - a.delivered);
+  return { day, delivered: n, fees: totFee, collected: totPrice,
+    companyShare: money(totFee * (1 - FEE_SHARE)), driversShare: money(totFee * FEE_SHARE),
+    feeShare: FEE_SHARE, drivers };
+}
+// تحليلات تاريخية: اتجاه يومي (حتى ٣٥ يوماً) + أداء الموصّلين والمتاجر من الدفتر
+function analyticsReport(days) {
+  const nDays = Math.min(35, Math.max(1, +days || 14));
+  const trend = [];
+  for (let off = nDays - 1; off >= 0; off--) {
+    const k = dateKey(off), s = dailyStats.get(k) || {};
+    trend.push({ day: k, created: s.created || 0, delivered: s.delivered || 0, cancelled: s.cancelled || 0,
+      escalated: s.escalated || 0, sos: s.sos || 0, fees: money(s.fees || 0), gmv: money(s.gmv || 0),
+      avgDurMin: s.durCnt ? Math.round(s.durSum / s.durCnt) : null });
+  }
+  const cutoff = dateKey(nDays - 1);
+  const byDriver = new Map(), byStore = new Map();
+  let durSum = 0, durCnt = 0;
+  for (const e of ledger) if (e.day >= cutoff) {
+    if (e.durMin != null) { durSum += e.durMin; durCnt++; }
+    const dk = e.driver || 'غير مسجّل';
+    const d = byDriver.get(dk) || { driver: dk, delivered: 0, fees: 0, durSum: 0, durCnt: 0 };
+    d.delivered++; d.fees = money(d.fees + e.fee);
+    if (e.durMin != null) { d.durSum += e.durMin; d.durCnt++; }
+    byDriver.set(dk, d);
+    if (e.store) byStore.set(e.store, (byStore.get(e.store) || 0) + 1);
+  }
+  return { days: nDays, trend,
+    totals: { created: trend.reduce((a, t) => a + t.created, 0), delivered: trend.reduce((a, t) => a + t.delivered, 0),
+      cancelled: trend.reduce((a, t) => a + t.cancelled, 0), fees: money(trend.reduce((a, t) => a + t.fees, 0)),
+      gmv: money(trend.reduce((a, t) => a + t.gmv, 0)), avgDurMin: durCnt ? Math.round(durSum / durCnt) : null },
+    drivers: [...byDriver.values()].map(d => ({ driver: d.driver, delivered: d.delivered, fees: d.fees,
+      avgDurMin: d.durCnt ? Math.round(d.durSum / d.durCnt) : null })).sort((a, b) => b.delivered - a.delivered).slice(0, 30),
+    stores: [...byStore.entries()].map(([store, delivered]) => ({ store, delivered }))
+      .sort((a, b) => b.delivered - a.delivered).slice(0, 30) };
+}
 
 // إخلاء دوري: طلبات منتهية تجاوزت مدة الاحتفاظ + موصلون غير متصلين منذ يوم
 setInterval(() => {
@@ -675,26 +749,65 @@ function pushAll(title, body, tag) {
 // ---------- 💾 ديمومة الحالة عبر غرفة التشغيل (تخزينها دائم) — تنجو من إعادة النشر ----------
 // المتاجر والإحصاء اليومي يُنسخان احتياطياً إلى غرفة التشغيل عند كل تغيّر، ويُستعادان عند الإقلاع.
 let backupDirty = false, restoreDone = false;   // 🛡️ لا ننسخ قبل اكتمال الاستعادة لئلا نطمس النسخة الجيدة بحالة فارغة
-function backupState() {
-  if (!restoreDone) return;
-  if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
-  pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${brainMemory.context.length} معلومة`);
-  brainEvent('state_backup', { backup: { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
+function buildBackup() {
+  return { stores: [...stores.values()], dailyStats: [...dailyStats.entries()], storeSeq,
     context: brainMemory.context, notes: brainMemory.notes, team: brainMemory.team, faq: brainMemory.faq,
     goals: brainMemory.goals, memSeq, vapid, pushSubs: [...pushSubs.values()],
+    ledger: ledger.slice(-2500),                                 // 💰 دفتر المحاسبة ينجو أيضاً (آخر ٢٥٠٠ قيد)
     // 🚚 الطلبات النشطة وإسناداتها تنجو من إعادة النشر — لا تُيتَّم توصيلة جارية
-    activeOrders: [...ACTIVE.values()].map(orderPublic), orderSeq } });
+    activeOrders: [...ACTIVE.values()].map(orderPublic), orderSeq };
+}
+// 💾 طبقة ثانية: لقطة محلية ذرّية على القرص — تُنقذ عند تعذّر غرفة التشغيل وتعمل حتى بلا أي خدمة خارجية
+const DATA_DIR = process.env.STATE_DIR || fileURLToPath(new URL('../data', import.meta.url));
+const STATE_FILE = join(DATA_DIR, 'state.json');
+function snapshotLocal(backup) {
+  try {
+    mkdirSync(DATA_DIR, { recursive: true });
+    const tmp = STATE_FILE + '.tmp';
+    writeFileSync(tmp, JSON.stringify({ at: Date.now(), v: BUILD_TAG, backup }));
+    renameSync(tmp, STATE_FILE);                                 // إعادة تسمية ذرّية — لا ملف نصفه مكتوب أبداً
+  } catch (e) { console.warn('[💾] تعذّرت اللقطة المحلية:', e.message); }
+}
+function backupState() {
+  if (!restoreDone) return;
+  const backup = buildBackup();
+  snapshotLocal(backup);                                         // القرص أولاً — يعمل دائماً حتى بلا مفاتيح
   backupDirty = false;
+  if (!BRAIN_WEBHOOK_URL || !process.env.BRAIN_API_KEY) return;
+  pulse('💾 الحافظ — الديمومة', `نسخ ${stores.size} متجر · ${brainMemory.notes.length} ملاحظة · ${ledger.length} قيد محاسبة`);
+  brainEvent('state_backup', { backup });
 }
 setInterval(() => { if (backupDirty) backupState(); }, 60_000).unref?.();
-async function restoreState() {
-  if (!BRAIN_PANEL_URL || !process.env.BRAIN_API_KEY) return;
+// ⚡ نسخ سريع مؤجَّل (٥ ثوانٍ): تغيّر مهم (إغلاق طلب/معلومة جديدة) لا ينتظر دورة الدقيقة — يقلّص نافذة الفقد
+let backupSoonTimer = null;
+function backupSoon() {
+  backupDirty = true;
+  if (backupSoonTimer) return;
+  backupSoonTimer = setTimeout(() => { backupSoonTimer = null; if (backupDirty) backupState(); }, 5_000);
+  backupSoonTimer.unref?.();
+}
+// 🛑 إغلاق كريم: Render يرسل SIGTERM قبل كل إعادة نشر — نُفرغ الحالة كاملة قبل أن تُطفأ العملية
+let shuttingDown = false;
+async function gracefulExit(sig) {
+  if (shuttingDown) return; shuttingDown = true;
+  console.log(`[🛑] ${sig} — حفظ الحالة قبل الإطفاء…`);
   try {
-    const r = await fetch(BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect/backup',
-      { headers: { 'x-api-key': BRAIN_API_KEY }, signal: AbortSignal.timeout(8000) });
-    if (!r.ok) return;
-    const b = (await r.json())?.backup;
-    if (!b) return;
+    const backup = buildBackup();
+    snapshotLocal(backup);
+    if (BRAIN_WEBHOOK_URL && process.env.BRAIN_API_KEY)
+      await fetch(BRAIN_WEBHOOK_URL, { method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-api-key': BRAIN_API_KEY },
+        body: JSON.stringify({ event: 'state_backup', at: Date.now(), backup }),
+        signal: AbortSignal.timeout(5000) }).catch(() => {});
+  } catch {}
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulExit('SIGTERM'));
+process.on('SIGINT', () => gracefulExit('SIGINT'));
+// دمج نسخة محفوظة في الحالة الحية — «يملأ الفارغ فقط» فيصحّ تطبيقه من مصدرين بالتتابع (الغرفة ثم القرص)
+function applyBackup(b, label) {
+  if (!b || typeof b !== 'object') return;
+  {
     if (!stores.size && Array.isArray(b.stores)) {
       for (const s of b.stores) if (s?.id && s.name && Number.isFinite(+s.lat) && Number.isFinite(+s.lng))
         stores.set(s.id, { id: s.id, name: String(s.name).slice(0, 40), lat: +s.lat, lng: +s.lng });
@@ -711,6 +824,8 @@ async function restoreState() {
     if (!vapid && b.vapid?.pub && b.vapid?.privJwk) vapid = b.vapid;                       // 📳 نفس مفاتيح التنبيهات
     if (Array.isArray(b.pushSubs)) for (const s of b.pushSubs)
       if (s?.endpoint?.startsWith('https://') && s.keys?.p256dh && s.keys?.auth && !pushSubs.has(s.endpoint)) pushSubs.set(s.endpoint, s);
+    if (!ledger.length && Array.isArray(b.ledger))               // 💰 دفتر المحاسبة يعود كما كان
+      ledger.push(...b.ledger.filter(e => e && e.id && e.day).slice(-2500));
     // 🚚 استعادة الطلبات النشطة: تُعاد للفهارس، والمُسنَدة تنتظر عودة الموصل، والجديدة يُعاد عرضها بعد الإقلاع
     let restoredNew = 0;
     if (Array.isArray(b.activeOrders)) {
@@ -726,8 +841,26 @@ async function restoreState() {
       }
       if (restoredNew) setTimeout(() => { for (const o of ACTIVE.values()) if (o.status === 'new' && !o._offer) startDispatch(o); }, 4000);
     }
-    console.log(`[💾] استُعيدت الحالة: ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة · ${pushSubs.size} هاتف مشترك · ${ACTIVE.size} طلب نشط`);
+    console.log(`[💾] استُعيدت الحالة (${label}): ${stores.size} متجر · ${dailyStats.size} يوم إحصاء · ${brainMemory.context.length} معلومة · ${brainMemory.notes.length} ملاحظة · ${ledger.length} قيد محاسبة · ${ACTIVE.size} طلب نشط`);
+  }
+}
+async function restoreState() {
+  if (!BRAIN_PANEL_URL || !process.env.BRAIN_API_KEY) return;
+  try {
+    const r = await fetch(BRAIN_PANEL_URL.replace(/\/+$/, '') + '/webhooks/dyar-connect/backup',
+      { headers: { 'x-api-key': BRAIN_API_KEY }, signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return;
+    const b = (await r.json())?.backup;
+    if (b) applyBackup(b, 'غرفة التشغيل');
   } catch { /* أفضل-جهد — يعمل بلا استعادة */ }
+}
+// طبقة القرص: تُطبَّق بعد الغرفة «فتملأ ما بقي فارغاً» — وتُنقذ كاملةً عندما تكون الغرفة متعذّرة
+function restoreLocal() {
+  try {
+    if (!existsSync(STATE_FILE)) return;
+    const j = JSON.parse(readFileSync(STATE_FILE, 'utf8'));
+    if (j?.backup) applyBackup(j.backup, 'اللقطة المحلية');
+  } catch (e) { console.warn('[💾] تعذّرت قراءة اللقطة المحلية:', e.message); }
 }
 
 // ---------- تسجيل ذاتي لدى غرفة التشغيل (Zero-Config) ----------
@@ -1680,6 +1813,17 @@ async function handleHttp(req, res) {
     return json(200, { asOf: Date.now(), open: openPriorities(), counts: openCounts(),
       recentClosed: prClosed.slice(-20).reverse(), load: teamLoad(), staff: STAFF });
   }
+  // 💰 التسوية المالية اليومية: لكل موصّل توصيلاته وأجوره ومستحقّه وما يسلّمه للمكتب — ?day=YYYY-MM-DD (افتراضي اليوم)
+  if (url.pathname === '/api/brain/finance' && req.method === 'GET') {
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
+    const day = /^\d{4}-\d{2}-\d{2}$/.test(url.searchParams.get('day') || '') ? url.searchParams.get('day') : dateKey();
+    return json(200, { asOf: Date.now(), ...financeDay(day) });
+  }
+  // 📈 التحليلات التاريخية: اتجاه يومي + أداء الموصّلين والمتاجر وزمن التوصيل — ?days=14 (حتى ٣٥)
+  if (url.pathname === '/api/brain/analytics' && req.method === 'GET') {
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
+    return json(200, { asOf: Date.now(), ...analyticsReport(url.searchParams.get('days')) });
+  }
   // إجراء على أولوية من أي واجهة: {pin, id, action: ack|start|resolve|reassign, who, note}
   if (url.pathname === '/api/brain/priority-action' && req.method === 'POST') {
     const b = await readBody(req);
@@ -1776,6 +1920,9 @@ async function handleHttp(req, res) {
       const o = { id: 'ORD-' + (++orderSeq), ref, title: String(b.title).slice(0, 80),
         dest: { lat, lng }, driverId: null, driverName: null,
         status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
+        // 💰 حقول المحاسبة والإشعار من التطبيق: قيمة الطلب، أجرة التوصيل، وهاتف الزبون (لا يُبثّ علنياً أبداً)
+        price: money(b.price), fee: money(b.fee, 1000) || money(process.env.DELIVERY_FEE_DEFAULT, 1000),
+        phone: custPhone(b.phone),
         history: [{ st: 'new', at: Date.now(), d: 'التطبيق' }],
         createdAt: Date.now(), updatedAt: Date.now() };
       const gl = +b.origin?.lat, gg = +b.origin?.lng;           // موقع متجر التطبيق إن أُرسل — وإلا مطابقة بالاسم
@@ -1937,6 +2084,8 @@ wss.on('connection', (ws, req) => {
           const o = { id: 'ORD-' + (++orderSeq), title: String(m.title).slice(0, 80),
             dest: { lat: +m.dest.lat, lng: +m.dest.lng }, driverId: null, driverName: null,
             status: 'new', offeredTo: null, etaMin: null, etaAt: null, riskLate: false,
+            price: money(m.price), fee: money(m.fee, 1000) || money(process.env.DELIVERY_FEE_DEFAULT, 1000),
+            phone: custPhone(m.phone),
             history: [{ st: 'new', at: Date.now(), d: null }],
             createdAt: Date.now(), updatedAt: Date.now() };
           linkStore(o);                                         // متجر مذكور بالعنوان ⟵ التقاط ثنائي الأرجل
@@ -2088,6 +2237,7 @@ server.on('error', (e) => { console.error('[fatal] تعذر الاستماع:', 
 // 🛡️ الإقلاع الآمن: نستعيد الحالة ونهيّئ المفاتيح والفريق قبل قبول أي طلب — لا سباق يطمس البيانات المحفوظة
 async function boot() {
   await restoreState().catch(() => {});   // أفضل-جهد — يعمل بلا استعادة
+  restoreLocal();                          // 💾 طبقة القرص تكمّل ما لم تُعِده الغرفة (أو تُنقذ كاملةً عند تعذّرها)
   ensureVapid();                          // مفاتيح VAPID المحفوظة تفوز؛ تُولَّد جديدة فقط إن لم تُستعد
   seedTeam();                             // الفريق المحفوظ يفوز؛ يُزرع الافتراضي فقط إن كان فارغاً
   restoreDone = true;                     // من الآن يُسمح بالنسخ الاحتياطي

@@ -6,6 +6,7 @@
   "description": "Dyar Connect — realtime gateway: live GPS tracking, presence, device enrollment",
   "scripts": {
     "start": "node src/server.js",
+    "test": "node test/run.mjs",
     "sim": "node sim.js"
   },
   "dependencies": {

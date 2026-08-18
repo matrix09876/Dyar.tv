@@ -1,0 +1,26 @@
+# 🛡️ فحص كل دفعة قبل أن تصل الإنتاج: صياغة + حزم الفحوص الأربع على خادم حقيقي
+# يمنع نشر بناء مكسور — Render ينشر من الفرع، وهذا الحارس يكشف الكسر فور الدفع.
+name: CI
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - name: Syntax check
+        run: node --check src/server.js
+      - name: Test suites (fresh server per suite)
+        run: npm test

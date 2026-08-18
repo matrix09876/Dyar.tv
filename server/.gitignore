@@ -1,3 +1,4 @@
 node_modules/
 *.pem
 _shots/
+data/

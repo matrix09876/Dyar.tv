@@ -165,6 +165,7 @@
       <button data-p="stores">🏪</button>
       <button data-p="prio">⚡<span id="prioBadge">0</span></button>
       <button data-p="brain">🧠</button>
+      <button data-p="fin">💰</button>
       <button data-p="feed">البث</button>
     </div>
 
@@ -213,6 +214,21 @@
 
       <div style="font-size:12px;color:var(--muted);font-weight:700;margin:12px 0 6px">🕸 خريطة معرفة العقل — كل ما يعرفه الآن بنظرة واحدة</div>
       <canvas id="knowMap" style="width:100%;height:230px;background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px"></canvas>
+    </div>
+
+    <div class="pane" id="p-fin">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px">
+        <div style="flex:1;font-size:12px;color:var(--muted);font-weight:700">💰 المالية والتسوية — من قيود تسليم حقيقية</div>
+        <input id="finDay" type="date" style="font-size:11.5px;padding:4px 6px">
+        <button id="finRefresh" title="تحديث">⟳</button>
+      </div>
+      <div id="finTotals" style="display:grid;grid-template-columns:repeat(2,1fr);gap:6px;margin-bottom:8px"></div>
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin:8px 0 4px">🛵 تسوية الموصّلين لليوم المحدد</div>
+      <div id="finDrivers" style="overflow-x:auto"><div class="empty">لا تسليمات بعد لليوم المحدد.<br>أرسل قيمة الطلب وأجرة التوصيل مع كل طلب (price / fee) لتُبنى التسوية تلقائياً.</div></div>
+      <div style="font-size:12px;color:var(--muted);font-weight:700;margin:12px 0 4px">📈 آخر ١٤ يوماً — طلبات وأجور</div>
+      <div id="finTrend" style="display:flex;gap:3px;align-items:flex-end;height:74px"></div>
+      <div id="finPerf" style="margin-top:10px"></div>
+      <div id="finAsOf" style="font-size:10.5px;color:var(--muted);margin-top:6px;min-height:1.2em"></div>
     </div>
 
     <div class="pane" id="p-prio">
@@ -746,7 +762,49 @@
     document.querySelectorAll('.tabs button').forEach(x => x.classList.toggle('active', x === b));
     document.querySelectorAll('.pane').forEach(p => p.classList.toggle('show', p.id === 'p-' + b.dataset.p));
     if (b.dataset.p === 'brain') setTimeout(renderKnowMap, 30);      // الرسم يحتاج التبويب ظاهراً (عرض > 0)
+    if (b.dataset.p === 'fin') loadFinance();                        // 💰 المالية تُحمَّل عند فتح تبويبها
   });
+
+  // ================= 💰 المالية والتسوية + التحليلات =================
+  const ils = (v) => '₪' + (Math.round((+v || 0) * 100) / 100).toLocaleString('en');
+  async function loadFinance() {
+    const day = $('finDay').value;
+    try {
+      const [fr, ar] = await Promise.all([
+        fetch('/api/brain/finance' + (day ? '?day=' + day : ''), { headers: { 'x-kiosk-pin': pin } }),
+        fetch('/api/brain/analytics?days=14', { headers: { 'x-kiosk-pin': pin } }),
+      ]);
+      if (fr.status === 401) { sessionStorage.removeItem('pin'); pin = ''; askPin('رمز اللوحة تغيّر — أدخل الرمز الجديد'); return; }
+      const f = await fr.json(), a = await ar.json();
+      if (!$('finDay').value) $('finDay').value = f.day;
+      const box = (label, val, hint) => `<div style="background:var(--surface2,#161a24);border:1px solid var(--line);border-radius:10px;padding:8px 10px" title="${hint || ''}">
+        <div class="num" style="font-size:17px;font-weight:800">${val}</div><div style="font-size:10.5px;color:var(--muted)">${label}</div></div>`;
+      $('finTotals').innerHTML =
+        box('توصيلات مُسلَّمة', f.delivered, 'قيود التسليم لليوم المحدد') +
+        box('أجور التوصيل', ils(f.fees), 'مجموع أجرة التوصيل (fee)') +
+        box('محصَّل من الزبائن', ils(f.collected), 'مجموع قيمة الطلبات (price) التي جمعها الموصلون') +
+        box(`حصة الشركة (${Math.round((1 - f.feeShare) * 100)}٪ من الأجرة)`, ils(f.companyShare), 'يمكن ضبط الحصة بمتغير DRIVER_FEE_SHARE');
+      $('finDrivers').innerHTML = !f.drivers.length
+        ? '<div class="empty">لا تسليمات بعد لليوم المحدد.<br>أرسل قيمة الطلب وأجرة التوصيل مع كل طلب (price / fee) لتُبنى التسوية تلقائياً.</div>'
+        : `<table style="width:100%;border-collapse:collapse;font-size:12px">
+            <tr style="color:var(--muted);text-align:right"><th style="padding:4px">الموصل</th><th>توصيلات</th><th>أجوره</th><th>مستحقّه</th><th>يسلّم للمكتب</th></tr>` +
+          f.drivers.map(d => `<tr style="border-top:1px solid var(--line)">
+            <td style="padding:5px 4px;font-weight:700">${esc(d.driver)}</td><td class="num">${d.delivered}</td>
+            <td class="num">${ils(d.fees)}</td><td class="num" style="color:var(--online,#3fbf77)">${ils(d.due)}</td>
+            <td class="num" style="color:var(--busy,#e2a43c)">${ils(d.handover)}</td></tr>`).join('') + '</table>';
+      const mx = Math.max(1, ...a.trend.map(t => t.delivered));
+      $('finTrend').innerHTML = a.trend.map(t => `<div title="${t.day}: ${t.delivered} تسليم · ${ils(t.fees)} أجور${t.avgDurMin ? ' · ~' + t.avgDurMin + ' د' : ''}"
+        style="flex:1;display:flex;flex-direction:column;justify-content:flex-end;height:100%">
+        <div style="background:var(--accent,#e2432e);opacity:${t.delivered ? .9 : .18};border-radius:3px 3px 0 0;height:${Math.max(4, Math.round(t.delivered / mx * 62))}px"></div>
+        <div style="font-size:8.5px;color:var(--muted);text-align:center">${t.day.slice(8)}</div></div>`).join('');
+      $('finPerf').innerHTML =
+        (a.totals.avgDurMin ? `<div style="font-size:11.5px;color:var(--muted);margin-bottom:6px">متوسط زمن التوصيل (${a.days} يوماً): <b class="num" style="color:var(--text)">${a.totals.avgDurMin} دقيقة</b> · أُنجز <b class="num" style="color:var(--text)">${a.totals.delivered}</b> من <b class="num">${a.totals.created}</b></div>` : '') +
+        (a.stores.length ? `<div style="font-size:11px;color:var(--muted)">🏪 الأنشط: ${a.stores.slice(0, 5).map(s => esc(s.store) + ' (' + s.delivered + ')').join(' · ')}</div>` : '');
+      $('finAsOf').textContent = 'آخر تحديث: ' + new Date(f.asOf).toLocaleTimeString('en-GB');
+    } catch { $('finAsOf').textContent = 'تعذّر تحميل المالية — حاول ثانية'; }
+  }
+  $('finRefresh').onclick = loadFinance;
+  $('finDay').onchange = loadFinance;
   ['tTrails','tAcc','tCells','tRoutes'].forEach(id => $(id).addEventListener('change', redrawLayers));
   // تحديث مسارات كل الطلبات الجارية دورياً (حتى 8 لكل دورة — لطف مع OSRM، والباقي بالدورة التالية)
   async function refreshAllRoutes() {
