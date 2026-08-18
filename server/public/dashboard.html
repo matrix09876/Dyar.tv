@@ -25,7 +25,7 @@
 
   /* ===== الرأس ===== */
   header{display:flex; align-items:center; gap:12px; padding:0 14px; background:var(--surface);
-         border-bottom:1px solid var(--line); z-index:30}
+         border-bottom:1px solid var(--line); z-index:50}   /* فوق شريط الطوارئ (40) — فلا يحجب قائمة الإجراءات المفتوحة */
   header .brand b{color:var(--accent); font-size:17px}
   header .brand span{color:var(--muted); font-size:12px; margin-inline-start:6px}
   .chip{display:inline-flex; align-items:center; gap:6px; padding:3px 10px; border-radius:999px;
@@ -202,7 +202,7 @@
     </div>
 
     <div class="pane" id="p-drivers">
-      <div id="dlist"><div class="empty">لا أجهزة بعد — اضغط «➕ جهاز» وامسح الرمز من UR5 أو أي هاتف.</div></div>
+      <div id="dlist"><div class="empty">لا أجهزة بعد — من قائمة «⋯ إجراءات» اختر «➕ ربط جهاز موصّل» وامسح الرمز من UR5 أو أي هاتف.</div></div>
     </div>
 
     <div class="pane show" id="p-orders">
@@ -276,7 +276,7 @@
       </div>
       <input id="custSearch" placeholder="🔎 بحث بالهاتف أو رقم آخر طلب…" style="width:100%;margin-bottom:6px">
       <div id="custList"><div class="empty">يُبنى السجل تلقائيًا من الطلبات التي تصل بهاتف الزبون (حقل phone من التطبيق).</div></div>
-      <div style="font-size:11px;color:var(--faint);border-top:1px solid var(--line);padding-top:8px;margin-top:8px;line-height:1.7">الهاتف لا يظهر إلا هنا خلف رمز الغرفة — ولا يصل أبدًا لصفحة التتبّع العلنية.</div>
+      <div style="font-size:11px;color:var(--faint);border-top:1px solid var(--line);padding-top:8px;margin-top:8px;line-height:1.7">الهاتف يظهر هنا خلف رمز الغرفة، ولموصّل الطلب نفسه ليتصل بالزبون — ولا يصل أبدًا لصفحة التتبّع العلنية.</div>
     </div>
 
     <div class="pane" id="p-fin">
@@ -822,14 +822,16 @@
   });
 
   // ================= ⋯ قائمة الإجراءات المجمّعة =================
+  const closeMore = () => { $('moreMenu').classList.remove('open'); $('moreBtn').setAttribute('aria-expanded', 'false'); };
   $('moreBtn').onclick = (e) => { e.stopPropagation();
     const open = $('moreMenu').classList.toggle('open');
     $('moreBtn').setAttribute('aria-expanded', String(open)); };
+  // اختيار أي بند يُغلق القائمة فوراً (قبل تنفيذ معالجه) — ولا تبقى مفتوحة تحت الحوارات أو فوق الخريطة
+  $('moreMenu').addEventListener('click', (e) => { if (e.target.closest('button, a')) closeMore(); });
   document.addEventListener('click', (e) => {
-    if (!$('moreMenu').contains(e.target) && e.target !== $('moreBtn')) {
-      $('moreMenu').classList.remove('open'); $('moreBtn').setAttribute('aria-expanded', 'false');
-    }
+    if (!$('moreMenu').contains(e.target) && e.target !== $('moreBtn')) closeMore();
   });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMore(); });
 
   // ================= 👥 الزبائن والولاء =================
   let custCache = null;
@@ -840,6 +842,7 @@
         fetch('/api/brain/performance', { headers: { 'x-kiosk-pin': pin } }),
       ]);
       if (cr.status === 401) { sessionStorage.removeItem('pin'); pin = ''; askPin('رمز اللوحة تغيّر — أدخل الرمز الجديد'); return; }
+      if (!cr.ok) throw 0;                                       // خطأ خادم ⟵ رسالة واضحة لا «undefined» في الخلايا
       custCache = await cr.json();
       const pf = pr.ok ? await pr.json() : { drivers: [] };
       $('custTotal').textContent = custCache.total;
@@ -851,7 +854,9 @@
     } catch { $('custList').innerHTML = '<div class="empty">تعذّر التحميل — حاول ثانية</div>'; }
   }
   function renderCustList() {
-    const q = $('custSearch').value.trim();
+    // تطبيع الأرقام الهندية (٠١٢٣/۰۱۲۳) — لوحات الهواتف العربية تكتبها فيفشل البحث ظلماً
+    const nd = (s) => String(s || '').replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d)).replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d));
+    const q = nd($('custSearch').value.trim());
     const rows = (custCache?.top || []).filter(c => !q || String(c.phone).includes(q) || String(c.lastRef || '').includes(q));
     $('custList').innerHTML = rows.length ? rows.map(c => `
       <div class="order" style="margin-bottom:6px">

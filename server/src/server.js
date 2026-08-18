@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'unified-desk-18'; // وسم البناء
+const BUILD_TAG = 'unified-desk-19'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -1950,10 +1950,10 @@ async function handleHttp(req, res) {
     { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     return json(200, { asOf: Date.now(), ...analyticsReport(url.searchParams.get('days')) });
   }
-  // 👥 سجلّ الزبائن: كم نعرف، كم عائداً، والأنشط — لبناء الولاء والاسترجاع
+  // 👥 سجلّ الزبائن: كم نعرف، كم عائداً، والأنشط — لبناء الولاء والاسترجاع (١٠٠ صف ليشمل البحثَ في اللوحة)
   if (url.pathname === '/api/brain/customers' && req.method === 'GET') {
     { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
-    return json(200, custReport(20));
+    return json(200, custReport(100));
   }
   // 🛵 أداء الموصّلين: قبول العروض وساعات الاتصال ومتوسط تقييم الزبائن
   if (url.pathname === '/api/brain/performance' && req.method === 'GET') {
