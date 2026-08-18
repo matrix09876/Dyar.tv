@@ -108,6 +108,11 @@
         <button class="tool" id="ordPick" style="border-color:var(--busy)">📦 استلمت</button>
         <button class="tool" id="ordDone" style="border-color:var(--online); display:none">✅ سلّمت</button>
       </div>
+      <a class="tool" id="ordCall" href="#" style="display:none; margin-top:8px; text-decoration:none; color:var(--online); border-color:var(--online)">📞 اتصل بالزبون</a>
+    </div>
+
+    <div class="card num" id="dayCard" style="display:none; margin-top:6px; font-size:13.5px">
+      🏁 يومك حتى الآن: <b id="dayN">0</b> توصيلة · أجور <b id="dayFees">₪0</b> · مستحقك <b id="dayDue" style="color:var(--online)">₪0</b>
     </div>
 
     <div class="toolrow">
@@ -228,6 +233,10 @@
     $('ordNav').textContent = '🧭 وجّهني — ' + t.label;
     $('ordDist').textContent = lastFix && t
       ? 'المسافة إلى ' + t.label + ': ' + havKm(lastFix, t).toFixed(1) + ' كم (خط مستقيم)' : '';
+    // 📞 هاتف الزبون إن أرسله التطبيق — نقرة واحدة للاتصال (الاسم الأول للخصوصية يبقى عند المكتب)
+    const call = $('ordCall');
+    if (myOrder.phone) { call.style.display = 'block'; call.href = 'tel:' + myOrder.phone; }
+    else { call.style.display = 'none'; call.removeAttribute('href'); }
   }
   function setOrderMsg(o, announceNew) {
     const isNew = o && (!myOrder || myOrder.id !== o.id);
@@ -262,6 +271,12 @@
     else if (m.t === 'kicked') { closing = true;
       logEv('ann', '⛔ النظام', 'فُصل هذا الجهاز من غرفة العمليات'); }
     else if (m.t === 'stats') $('chCnt').textContent = m.online + ' متصل';
+    else if (m.t === 'day') {                          // 🏁 ملخص يوم الموصل بعد كل تسليم — من دفتر المحاسبة
+      $('dayCard').style.display = 'block';
+      $('dayN').textContent = m.delivered;
+      $('dayFees').textContent = '₪' + m.fees;
+      $('dayDue').textContent = '₪' + m.due;
+    }
     else if (m.t === 'voice') {                       // بث وارد — تشغيل فوري
       beep(660, 90);
       lastAudio = { mime: m.mime, data: m.data };

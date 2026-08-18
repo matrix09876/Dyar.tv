@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'security-pass-17'; // وسم البناء
+const BUILD_TAG = 'unified-desk-18'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -1343,9 +1343,11 @@ function briefText(kind) {
   const s = brainSummary(), y = s.yesterday, d = s.today, g = brainMemory.goals.dailyOrders;
   if (kind === 'evening') {
     const pct = g ? Math.round((d.delivered / g) * 100) : null;
+    const f = financeDay(dateKey());                             // 💰 مال اليوم في إحاطة الإغلاق — من القيود الحقيقية
     return `🌙 إغلاق يوم ${fmtDayAr(0)}: استقبلنا ${d.created} طلبية، أُنجز ${d.delivered}` +
       `${pct != null ? ` من هدف ${g} (${pct}%)${pct >= 100 ? ' 👏' : ''}` : ''}، أُلغي ${d.cancelled}` +
       `${d.escalated ? `، و${d.escalated} تصعيد` : ''}. ` +
+      (f.fees ? `أجور التوصيل اليوم ${f.fees} شيكل (حصة الشركة ${f.companyShare})، والمحصَّل من الزبائن ${f.collected} شيكل. ` : '') +
       (s.prOpen.length ? `${s.prOpen.length} أولوية ما زالت مفتوحة — لا تُغلق الوردية قبل تسليمها لمن يتابعها.` : 'كل الأولويات مغلقة — يوم نظيف.');
   }
   return `🌅 صباح الخير! إحاطة ديار ليوم ${fmtDayAr(0)}: أمس ${y.created} طلبية (${y.delivered} أُنجز، ${y.cancelled} أُلغي` +
@@ -2350,6 +2352,11 @@ wss.on('connection', (ws, req) => {
           const o = driverActiveOrderRaw(id);
           if (o && (m.orderId ? o.id === m.orderId : true) && (NEXT_OK[o.status] || []).includes(m.status)) {
             setOrder(o, { status: m.status }); pushDriverOrder(id);
+            if (m.status === 'delivered') {                    // 🛵 ملخص يوم الموصّل فور كل تسليم — من دفتره الحقيقي
+              let cnt = 0, fees = 0; const day = dateKey();
+              for (const e of ledger) if (e.day === day && e.driverId === id) { cnt++; fees = sum2(fees + e.fee); }
+              send(ws, { t: 'day', delivered: cnt, fees, due: sum2(fees * FEE_SHARE) });
+            }
           }
         }
 
