@@ -61,6 +61,7 @@ ck('التحليلات تحمل تقييم الموصّل ونسبة قبوله'
 
 console.log('— 4) التصدير المستقل: محمي، وينزل نسخة تحوي كل شيء —');
 ck('export بلا رمز = 401', (await fetch(BASE + '/api/brain/export')).status === 401);
+ck('export برمزٍ في الرابط مرفوض (الترويسة حصراً)', (await fetch(BASE + '/api/brain/export?pin=' + PIN)).status === 401);
 const exR = await fetch(BASE + '/api/brain/export', { headers: { 'x-kiosk-pin': PIN } });
 const exJ = await exR.json();
 ck('التصدير ينجح بترويسة تنزيل', exR.status === 200 && /attachment/.test(exR.headers.get('content-disposition') || ''));

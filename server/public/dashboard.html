@@ -806,7 +806,18 @@
         (cu && cu.total ? `<div style="font-size:11px;color:var(--muted);margin-bottom:6px">👥 زبائن معروفون: <b class="num" style="color:var(--text)">${cu.total}</b> · منهم عائدون: <b class="num" style="color:var(--online,#3fbf77)">${cu.returning}</b></div>` : '') +
         (a.stores.length ? `<div style="font-size:11px;color:var(--muted)">🏪 الأنشط: ${a.stores.slice(0, 5).map(s => esc(s.store) + ' (' + s.delivered + ')').join(' · ')}</div>` : '') +
         `<div style="margin-top:8px"><a id="finExport" href="#" style="font-size:11.5px;color:var(--accent);text-decoration:none;font-weight:700">📦 تنزيل نسخة كاملة من كل البيانات (JSON)</a></div>`;
-      const ex = $('finExport'); if (ex) ex.onclick = (e) => { e.preventDefault(); window.open('/api/brain/export?pin=' + encodeURIComponent(pin), '_blank'); };
+      // 🛡️ التنزيل بالترويسة لا برمزٍ في الرابط — فلا يصل الرمز لأي سجلّ
+      const ex = $('finExport'); if (ex) ex.onclick = async (e) => {
+        e.preventDefault();
+        try {
+          const r = await fetch('/api/brain/export', { headers: { 'x-kiosk-pin': pin } });
+          if (!r.ok) return;
+          const u = URL.createObjectURL(await r.blob());
+          const a = document.createElement('a');
+          a.href = u; a.download = 'dyar-backup-' + new Date().toISOString().slice(0, 10) + '.json'; a.click();
+          setTimeout(() => URL.revokeObjectURL(u), 4000);
+        } catch {}
+      };
       $('finAsOf').textContent = 'آخر تحديث: ' + new Date(f.asOf).toLocaleTimeString('en-GB');
     } catch { $('finAsOf').textContent = 'تعذّر تحميل المالية — حاول ثانية'; }
   }

@@ -20,7 +20,7 @@ import { timingSafeEqual, createECDH, createHmac, createCipheriv, createPrivateK
          generateKeyPairSync, randomBytes, sign as cryptoSign } from 'node:crypto';
 
 const PORT = Number(process.env.PORT || 8080);
-const BUILD_TAG = 'phase3-loyalty-16'; // وسم البناء
+const BUILD_TAG = 'security-pass-17'; // وسم البناء
 const PIN = process.env.DYAR_PIN || '1234';
 const OPS_PIN = process.env.OPS_PIN || PIN;   // 🛡️ رمز غرفة العمليات منفصل — اضبطه في الإنتاج حتى لا يدخل موصل كمشرف
 // تطبيع الأرقام الهندية (٠١٢٣ / ۰۱۲۳) إلى لاتينية — لوحات مفاتيح الهواتف العربية تكتبها فيفشل التطابق ظلماً
@@ -506,6 +506,20 @@ function perfReport() {
     .sort((a, b) => b.accepted - a.accepted) };
 }
 // ⭐ تقييمات الزبائن (من صفحة التتبّع العلنيّة): تقييم واحد لكل طلب مُسلَّم، ونافذة تقييم ٢٤ ساعة بعد التسليم
+// 🛡️ حارس التسميم: حصة يومية لكل IP (سخيّة — زبائن البلدة يتشاركون IP عبر CGNAT) + سقف كلّي يومي،
+// فوق حدّ الدقيقة العام — تُحتسب على التقييم الناجح فقط فلا يستنزف مهاجمٌ بالتخمين حصةَ الزبائن الحقيقيين
+const rateIpDay = new Map();              // ip -> {d, n}
+let rateGlobalDay = { d: '', n: 0 };
+function ratingBudgetOk(ip) {
+  const d = dateKey();
+  if (rateGlobalDay.d !== d) rateGlobalDay = { d, n: 0 };
+  if (rateGlobalDay.n >= Number(process.env.RATINGS_MAX_PER_DAY || 400)) return false;
+  let e = rateIpDay.get(ip || '?');
+  if (!e || e.d !== d) { e = { d, n: 0 }; rateIpDay.set(ip || '?', e); }
+  if (rateIpDay.size > 5000) for (const [k, v] of rateIpDay) if (v.d !== d) rateIpDay.delete(k);
+  if (e.n >= Number(process.env.RATINGS_MAX_PER_IP_DAY || 30)) return false;
+  e.n++; rateGlobalDay.n++; return true;
+}
 const ratings = new Map();                // ref -> {stars, at, driverId, driver, note}
 const recentDelivered = new Map();        // ref -> {driverId, driver, at} — يعيش بعد إخلاء الطلب من الذاكرة
 function noteDelivered(o) {
@@ -830,9 +844,9 @@ const DATA_DIR = process.env.STATE_DIR || fileURLToPath(new URL('../data', impor
 const STATE_FILE = join(DATA_DIR, 'state.json');
 function snapshotLocal(backup) {
   try {
-    mkdirSync(DATA_DIR, { recursive: true });
+    mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });       // 🛡️ اللقطة تحمل بيانات شخصية — مالكها فقط يقرؤها
     const tmp = STATE_FILE + '.tmp';
-    writeFileSync(tmp, JSON.stringify({ at: Date.now(), v: BUILD_TAG, backup }));
+    writeFileSync(tmp, JSON.stringify({ at: Date.now(), v: BUILD_TAG, backup }), { mode: 0o600 });
     renameSync(tmp, STATE_FILE);                                 // إعادة تسمية ذرّية — لا ملف نصفه مكتوب أبداً
   } catch (e) { console.warn('[💾] تعذّرت اللقطة المحلية:', e.message); }
 }
@@ -1827,6 +1841,7 @@ async function handleHttp(req, res) {
     if (!((o && (o.status === 'delivered' || o.extDelivered)) || rd))
       return json(404, { ok: false, error: 'لا نجد توصيلة مُسلَّمة بهذا الرقم' });
     if (ratings.has(ref)) return json(200, { ok: true, already: true });
+    if (!ratingBudgetOk(clientIp(req))) return json(429, { error: 'وصلنا حدّ التقييمات اليوم — جرّب غداً أو كلّم مكتب ديار' });
     const drvId = rd?.driverId || o?.driverId || null, drvName = rd?.driver || o?.driverName || null;
     ratings.set(ref, { stars, at: Date.now(), driverId: drvId, driver: drvName,
       note: String(b.note || '').slice(0, 140) || null });
@@ -1944,8 +1959,9 @@ async function handleHttp(req, res) {
     return json(200, perfReport());
   }
   // 📦 تصدير نسخة كاملة مستقلة من كل بيانات ديار — ملف JSON ينزل للجهاز (استقلال تام عن أي خدمة)
+  // 🛡️ الرمز بالترويسة حصراً — رمزٌ في الرابط يتسرّب لسجلات الخادم وتاريخ المتصفح
   if (url.pathname === '/api/brain/export' && req.method === 'GET') {
-    { const g = pinGate(req, req.headers['x-kiosk-pin'] || url.searchParams.get('pin'), OPS_PIN); if (g) return json(g, pinErr(g)); }
+    { const g = pinGate(req, req.headers['x-kiosk-pin'], OPS_PIN); if (g) return json(g, pinErr(g)); }
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8',
       'content-disposition': `attachment; filename="dyar-backup-${dateKey()}.json"` });
     return res.end(JSON.stringify({ exportedAt: Date.now(), v: BUILD_TAG, backup: buildBackup() }, null, 1));
